@@ -19,4 +19,6 @@ artifacts/
 .cache/
 .platformio/
 .pio/
+.clangd
+compile_commands.json
 
