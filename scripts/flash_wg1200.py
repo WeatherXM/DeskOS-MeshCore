@@ -247,18 +247,19 @@ def cmd_restore_partitions(port: str) -> int:
 
 
 def cmd_rollback(port: str) -> int:
-    """Erase otadata sector to revert active boot slot to factory firmware."""
+    """Reset otadata sector to 0xFF to revert active boot slot to factory firmware."""
     print(f"\n=======================================================")
     print(f" Rolling Back to Factory WeatherXM Firmware")
-    print(f" Erasing otadata at 0x{OTADATA_OFFSET:X} (size 0x{OTADATA_SIZE:X})")
+    print(f" Resetting otadata at 0x{OTADATA_OFFSET:X} to factory default")
     print(f" Port: {port}")
     print(f"=======================================================\n")
 
-    run_esptool(
-        port,
-        ["erase_region", f"0x{OTADATA_OFFSET:X}", f"0x{OTADATA_SIZE:X}"],
-    )
-    print("\n[SUCCESS] otadata erased. ESP32-S3 bootloader will boot factory WeatherXM firmware.\n")
+    # Writing 0xFF across otadata resets both OTA sectors to 0xFFFFFFFF,
+    # causing the bootloader to safely boot factory. Using write_flash avoids
+    # security-lockout warnings raised by standalone erase_region on secured chips.
+    blank_otadata = bytearray(b"\xFF" * OTADATA_SIZE)
+    write_otadata_to_device(port, blank_otadata)
+    print("\n[SUCCESS] otadata reset to 0xFF. ESP32-S3 bootloader will boot factory WeatherXM firmware.\n")
     return 0
 
 
