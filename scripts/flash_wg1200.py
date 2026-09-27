@@ -317,15 +317,20 @@ def main() -> int:
         print("Error: No serial port specified and no WG1200 device auto-detected.", file=sys.stderr)
         return 1
 
-    if args.restore_partitions:
-        return cmd_restore_partitions(port)
-    elif args.rollback:
-        return cmd_rollback(port)
-    elif args.ota:
-        return cmd_flash_ota(port, args.bin)
-    elif args.status:
-        return cmd_status(port)
+    try:
+        if args.restore_partitions:
+            return cmd_restore_partitions(port)
+        elif args.rollback:
+            return cmd_rollback(port)
+        elif args.ota:
+            return cmd_flash_ota(port, args.bin)
+        elif args.status:
+            return cmd_status(port)
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: esptool command failed with exit code {exc.returncode}", file=sys.stderr)
+        return exc.returncode
     return 0
+
 
 
 if __name__ == "__main__":
