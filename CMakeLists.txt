@@ -110,7 +110,7 @@ endforeach()
 
 set(SEEED_COMPONENT_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/sensecap_indicator_esp32/components")
 
-set(EXTRA_COMPONENT_DIRS
+list(APPEND EXTRA_COMPONENT_DIRS
     "${SEEED_COMPONENT_DIR}/bsp"
     "${SEEED_COMPONENT_DIR}/bus"
     "${SEEED_COMPONENT_DIR}/i2c_devices"
@@ -118,8 +118,6 @@ set(EXTRA_COMPONENT_DIRS
     "${SEEED_COMPONENT_DIR}/lora"
     "${SEEED_COMPONENT_DIR}/lvgl"
 )
-
-set(COMPONENTS main)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(meshcore_deskos_d1l)

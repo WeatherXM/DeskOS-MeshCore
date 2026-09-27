@@ -36,12 +36,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STOCK_WXM_PARTITIONS_CSV = ROOT / "partitions_wg1200.csv"
 STOCK_WXM_PARTITIONS_BIN_CANDIDATES = [
+    ROOT / ".pio" / "build" / "wg1200" / "partitions.bin",
     Path("/Users/manos/Documents/mesh/WG1400/wg1200-firmware/.pio/build/wg1200_release/partitions.bin"),
     ROOT / "build" / "partition_table" / "partition-table.bin",
 ]
 
-DEFAULT_DESKOS_BIN = ROOT / "build" / "meshcore_deskos_d1l.bin"
-DEFAULT_OTADATA_BIN = ROOT / "build" / "ota_data_initial.bin"
+DEFAULT_DESKOS_BIN_CANDIDATES = [
+    ROOT / ".pio" / "build" / "wg1200" / "firmware.bin",
+    ROOT / "build" / "meshcore_deskos_d1l.bin",
+]
+
+DEFAULT_OTADATA_BIN_CANDIDATES = [
+    ROOT / ".pio" / "build" / "wg1200" / "ota_data_initial.bin",
+    ROOT / "build" / "ota_data_initial.bin",
+]
+
+
+def resolve_existing_path(explicit: Path | None, candidates: list[Path]) -> Path:
+    if explicit and explicit.is_file():
+        return explicit
+    for c in candidates:
+        if c.is_file():
+            return c
+    return candidates[0]
 
 PARTITION_TABLE_OFFSET = 0xC000
 PARTITION_TABLE_SIZE = 0x1000
@@ -145,13 +162,14 @@ def cmd_rollback(port: str) -> int:
     return 0
 
 
-def cmd_flash_ota(port: str, app_bin: Path) -> int:
+def cmd_flash_ota(port: str, app_bin: Path | None = None) -> int:
     """Flash DeskOS into ota_0 without touching factory firmware, certs, or partition table."""
-    if not app_bin.is_file():
-        print(f"Error: Application binary not found: {app_bin}", file=sys.stderr)
+    resolved_app_bin = resolve_existing_path(app_bin, DEFAULT_DESKOS_BIN_CANDIDATES)
+    if not resolved_app_bin.is_file():
+        print(f"Error: Application binary not found: {resolved_app_bin}", file=sys.stderr)
         return 1
 
-    otadata_bin = DEFAULT_OTADATA_BIN
+    otadata_bin = resolve_existing_path(None, DEFAULT_OTADATA_BIN_CANDIDATES)
     if not otadata_bin.is_file():
         # Generate clean 8KB otadata with seq=1 pointing to ota_0
         otadata_bytes = bytearray(b"\xFF" * 8192)
@@ -166,7 +184,7 @@ def cmd_flash_ota(port: str, app_bin: Path) -> int:
     print(f"\n=======================================================")
     print(f" Non-Destructive WG1200 DeskOS Installation")
     print(f" Port:             {port}")
-    print(f" App Binary:       {app_bin} -> 0x{OTA_0_OFFSET:X} (ota_0)")
+    print(f" App Binary:       {resolved_app_bin} -> 0x{OTA_0_OFFSET:X} (ota_0)")
     print(f" Otadata:          {otadata_bin} -> 0x{OTADATA_OFFSET:X}")
     print(f"-------------------------------------------------------")
     print(f" [PROTECTED] Bootloader (0x0):         UNTOUCHED")
@@ -184,7 +202,7 @@ def cmd_flash_ota(port: str, app_bin: Path) -> int:
             f"0x{OTADATA_OFFSET:X}",
             str(otadata_bin),
             f"0x{OTA_0_OFFSET:X}",
-            str(app_bin),
+            str(resolved_app_bin),
         ],
     )
     print("\n[SUCCESS] DeskOS flashed to ota_0 (0x420000).")
@@ -288,8 +306,8 @@ def main() -> int:
     parser.add_argument(
         "--bin",
         type=Path,
-        default=DEFAULT_DESKOS_BIN,
-        help=f"Path to DeskOS application binary (default: {DEFAULT_DESKOS_BIN})",
+        default=None,
+        help="Path to DeskOS application binary (auto-detects .pio or build/ output if omitted)",
     )
 
     args = parser.parse_args()

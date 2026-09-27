@@ -5,6 +5,8 @@ __pycache__/
 # ESP-IDF / firmware build outputs
 build/
 sdkconfig
+sdkconfig.*
+!sdkconfig.defaults*
 sdkconfig.old
 managed_components/
 
@@ -16,4 +18,5 @@ artifacts/
 .idea/
 .cache/
 .platformio/
+.pio/
 
