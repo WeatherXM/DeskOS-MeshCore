@@ -14,10 +14,22 @@ static d1l_bmp390_reading_t s_latest = {0};
 
 esp_err_t d1l_bmp390_init(void)
 {
+    if (s_initialized && s_present) {
+        return ESP_OK;
+    }
+
     float p = 0.0f, t = 0.0f;
     esp_err_t ret = bmp3xx_init(BMP390_I2C_ADDR);
-    esp_err_t read_ret = bmp3xx_read_data(&p, &t);
-    if (ret == ESP_OK || read_ret == ESP_OK) {
+    /* bmp3xx_init returns ESP_FAIL if already initialized by BSP during board init */
+    if (ret != ESP_OK) {
+        if (bmp3xx_read_data(&p, &t) == ESP_OK) {
+            ret = ESP_OK;
+        }
+    } else {
+        (void)bmp3xx_read_data(&p, &t);
+    }
+
+    if (ret == ESP_OK) {
         s_present = true;
         s_initialized = true;
         s_latest.present = true;

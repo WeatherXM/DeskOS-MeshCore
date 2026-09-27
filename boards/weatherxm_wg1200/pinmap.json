@@ -52,15 +52,14 @@
   "sensors": {
     "bmp390": {
       "i2c_address": "0x77",
-      "expander_pwr": 10
+      "expander_pwr": 10,
+      "populated": true
     },
     "atecc608a": {
       "i2c_address": "0x35",
-      "expander_pwr": 10
+      "expander_pwr": 9,
+      "populated": false
     }
   },
-  "buzzer": {
-    "expander_pin": 9,
-    "active_level": 1
-  }
+  "buzzer": null
 }

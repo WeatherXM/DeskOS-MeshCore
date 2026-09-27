@@ -49,7 +49,11 @@ esp_err_t d1l_sx1262_probe(d1l_radiohw_status_t *status)
     status->expander_ready = true;
     status->busy = (pins & (1U << EXPANDER_IO_RADIO_BUSY)) ? 1 : 0;
     status->dio1 = (pins & (1U << EXPANDER_IO_RADIO_DIO_1)) ? 1 : 0;
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    status->ver_pin = -1;
+#else
     status->ver_pin = (pins & (1U << EXPANDER_IO_RADIO_VER)) ? 1 : 0;
+#endif
     status->tcxo_default = "NONE";
 
     spi_device_handle_t spi = bsp_sx126x_spi_handle_get();

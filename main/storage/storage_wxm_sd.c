@@ -8,6 +8,8 @@
 
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "bsp_board.h"
 #include "bsp_storage.h"
 #include "tca9535.h"
@@ -19,6 +21,24 @@ static const char *TAG = "storage_wxm_sd";
 
 static bool s_mounted = false;
 static bool s_tree_verified = false;
+static SemaphoreHandle_t s_sd_file_mutex = NULL;
+
+static void sd_file_lock(void)
+{
+    if (!s_sd_file_mutex) {
+        s_sd_file_mutex = xSemaphoreCreateMutex();
+    }
+    if (s_sd_file_mutex) {
+        xSemaphoreTake(s_sd_file_mutex, portMAX_DELAY);
+    }
+}
+
+static void sd_file_unlock(void)
+{
+    if (s_sd_file_mutex) {
+        xSemaphoreGive(s_sd_file_mutex);
+    }
+}
 
 static bool resolve_sd_path(const char *rel_path, char *out_path, size_t out_size)
 {
@@ -197,7 +217,7 @@ esp_err_t d1l_storage_wxm_sd_probe(d1l_rp2040_sd_status_t *out_status)
 
     uint64_t total_bytes = 0;
     uint64_t free_bytes = 0;
-    bsp_spi_lock();
+    sd_file_lock();
     if (esp_vfs_fat_info(WXM_SD_MOUNT_POINT, &total_bytes, &free_bytes) == ESP_OK) {
         out_status->capacity_kb = (uint32_t)(total_bytes / 1024ULL);
         out_status->free_kb = (uint32_t)(free_bytes / 1024ULL);
@@ -210,7 +230,7 @@ esp_err_t d1l_storage_wxm_sd_probe(d1l_rp2040_sd_status_t *out_status)
 
     struct stat st = {0};
     int stat_res = stat(WXM_SD_MOUNT_POINT "/deskos", &st);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     if (stat_res == 0 && S_ISDIR(st.st_mode)) {
         out_status->deskos_root_ready = true;
@@ -241,14 +261,14 @@ esp_err_t d1l_storage_wxm_sd_mount(d1l_rp2040_sd_status_t *out_status)
 
     if (!s_mounted) {
         ESP_LOGI(TAG, "Mounting SD card via SDSPI on SPI3_HOST...");
-        bsp_spi_lock();
+        sd_file_lock();
         esp_err_t ret = bsp_sdcard_init_default();
         if (ret == ESP_OK) {
             s_mounted = true;
             ensure_deskos_tree();
             s_tree_verified = true;
         }
-        bsp_spi_unlock();
+        sd_file_unlock();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
             d1l_storage_wxm_sd_probe(out_status);
@@ -298,9 +318,9 @@ esp_err_t d1l_storage_wxm_sd_file_stat(
     snprintf(out_result->op, sizeof(out_result->op), "stat");
 
     struct stat st;
-    bsp_spi_lock();
+    sd_file_lock();
     int res = stat(full_path, &st);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     if (res == 0) {
         out_result->exists = true;
@@ -332,10 +352,10 @@ esp_err_t d1l_storage_wxm_sd_file_read(
     snprintf(out_result->op, sizeof(out_result->op), "get");
     out_result->offset = offset;
 
-    bsp_spi_lock();
+    sd_file_lock();
     FILE *f = fopen(full_path, "rb");
     if (!f) {
-        bsp_spi_unlock();
+        sd_file_unlock();
         out_result->last_error = ESP_ERR_NOT_FOUND;
         out_result->ok = false;
         snprintf(out_result->err, sizeof(out_result->err), "not_found");
@@ -346,7 +366,7 @@ esp_err_t d1l_storage_wxm_sd_file_read(
     long file_size = ftell(f);
     if (fseek(f, offset, SEEK_SET) != 0) {
         fclose(f);
-        bsp_spi_unlock();
+        sd_file_unlock();
         out_result->last_error = ESP_ERR_INVALID_SIZE;
         out_result->ok = false;
         snprintf(out_result->err, sizeof(out_result->err), "seek_failed");
@@ -356,7 +376,7 @@ esp_err_t d1l_storage_wxm_sd_file_read(
     size_t bytes_read = fread(out_data, 1, max_len, f);
     bool eof = feof(f) || (bytes_read < max_len) || (file_size >= 0 && (offset + bytes_read) >= (size_t)file_size);
     fclose(f);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     out_result->size = (uint32_t)(file_size > 0 ? file_size : 0);
     out_result->length = bytes_read;
@@ -387,7 +407,7 @@ esp_err_t d1l_storage_wxm_sd_file_write(
     snprintf(out_result->op, sizeof(out_result->op), "put");
     out_result->offset = offset;
 
-    bsp_spi_lock();
+    sd_file_lock();
     ensure_parent_dirs(full_path);
     FILE *f = NULL;
     if (truncate || offset == 0) {
@@ -400,7 +420,7 @@ esp_err_t d1l_storage_wxm_sd_file_write(
     }
 
     if (!f) {
-        bsp_spi_unlock();
+        sd_file_unlock();
         out_result->last_error = ESP_FAIL;
         out_result->ok = false;
         snprintf(out_result->err, sizeof(out_result->err), "open_failed");
@@ -417,7 +437,7 @@ esp_err_t d1l_storage_wxm_sd_file_write(
     }
     fflush(f);
     fclose(f);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     out_result->length = written;
     out_result->size = offset + written;
@@ -465,11 +485,11 @@ esp_err_t d1l_storage_wxm_sd_file_write_verified(
     }
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", full_path);
 
-    bsp_spi_lock();
+    sd_file_lock();
     ensure_parent_dirs(full_path);
     FILE *f = fopen(tmp_path, "wb");
     if (!f) {
-        bsp_spi_unlock();
+        sd_file_unlock();
         init_file_result(out_result, ESP_FAIL);
         snprintf(out_result->err, sizeof(out_result->err), "open_failed");
         return ESP_FAIL;
@@ -484,7 +504,7 @@ esp_err_t d1l_storage_wxm_sd_file_write_verified(
 
     if (written != len) {
         unlink(tmp_path);
-        bsp_spi_unlock();
+        sd_file_unlock();
         init_file_result(out_result, ESP_FAIL);
         snprintf(out_result->err, sizeof(out_result->err), "short_write");
         return ESP_FAIL;
@@ -494,12 +514,12 @@ esp_err_t d1l_storage_wxm_sd_file_write_verified(
     unlink(full_path);
     if (rename(tmp_path, full_path) != 0) {
         unlink(tmp_path);
-        bsp_spi_unlock();
+        sd_file_unlock();
         init_file_result(out_result, ESP_FAIL);
         snprintf(out_result->err, sizeof(out_result->err), "commit_failed");
         return ESP_FAIL;
     }
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     init_file_result(out_result, ESP_OK);
     out_result->length = written;
@@ -527,11 +547,11 @@ esp_err_t d1l_storage_wxm_sd_file_append(
     init_file_result(out_result, ESP_OK);
     snprintf(out_result->op, sizeof(out_result->op), "append");
 
-    bsp_spi_lock();
+    sd_file_lock();
     ensure_parent_dirs(full_path);
     FILE *f = fopen(full_path, "ab");
     if (!f) {
-        bsp_spi_unlock();
+        sd_file_unlock();
         out_result->last_error = ESP_FAIL;
         out_result->ok = false;
         snprintf(out_result->err, sizeof(out_result->err), "open_failed");
@@ -545,7 +565,7 @@ esp_err_t d1l_storage_wxm_sd_file_append(
     fflush(f);
     long fsz = ftell(f);
     fclose(f);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     out_result->length = written;
     out_result->size = (uint32_t)(fsz > 0 ? fsz : 0);
@@ -575,9 +595,9 @@ esp_err_t d1l_storage_wxm_sd_file_delete(
     init_file_result(out_result, ESP_OK);
     snprintf(out_result->op, sizeof(out_result->op), "del");
 
-    bsp_spi_lock();
+    sd_file_lock();
     int res = unlink(full_path);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     out_result->removed = (res == 0);
     out_result->removed_known = true;
@@ -604,13 +624,13 @@ esp_err_t d1l_storage_wxm_sd_file_rename(
     init_file_result(out_result, ESP_OK);
     snprintf(out_result->op, sizeof(out_result->op), "rename");
 
-    bsp_spi_lock();
+    sd_file_lock();
     ensure_parent_dirs(full_to);
     if (replace) {
         unlink(full_to);
     }
     int res = rename(full_from, full_to);
-    bsp_spi_unlock();
+    sd_file_unlock();
 
     out_result->ok = (res == 0);
     if (res != 0) {

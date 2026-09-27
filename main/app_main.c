@@ -157,8 +157,6 @@ void app_main(void)
         ESP_LOGI(TAG, "D1L board initialized; DeskOS boot splash visible");
 #if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
         (void)d1l_bmp390_init();
-        (void)d1l_buzzer_init();
-        d1l_buzzer_beep(80);
 #endif
     }
 

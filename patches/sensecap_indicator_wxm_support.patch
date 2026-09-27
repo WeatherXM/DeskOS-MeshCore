@@ -34,7 +34,7 @@ index 0ea33bd..5f7945c 100644
  }
  #endif
 diff --git a/components/bsp/src/boards/sensecap_indicator_board.c b/components/bsp/src/boards/sensecap_indicator_board.c
-index e74bb54..652af38 100644
+index e74bb54..34514c4 100644
 --- a/components/bsp/src/boards/sensecap_indicator_board.c
 +++ b/components/bsp/src/boards/sensecap_indicator_board.c
 @@ -30,8 +30,10 @@ static const char *TAG = "board sensecap";
@@ -42,7 +42,7 @@ index e74bb54..652af38 100644
  
  #define EXPANDER_IO_RP2040_RESET   8
 -
-+#define EXPANDER_IO_BUZZER         9
++#define EXPANDER_IO_ECC_PWR        9
  #define EXPANDER_IO_BMP_PWR       10
 +#define EXPANDER_IO_SD_CS         11
 +#define EXPANDER_IO_SD_DET        12
@@ -81,16 +81,14 @@ index e74bb54..652af38 100644
  
      .FUNC_SPI_EN =         (0),
      .GPIO_SPI_CS =         (GPIO_NUM_NC),
-@@ -259,6 +271,13 @@ esp_err_t bsp_board_sensecap_indicator_init(void)
+@@ -259,6 +271,11 @@ esp_err_t bsp_board_sensecap_indicator_init(void)
  
      g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_BMP_PWR, 1);
      g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_BMP_PWR, 1);
 +#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_SD_CS, 1);     // Inactive HIGH (Deselected)
 +    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_SD_CS, 1); // SD_CS Output
-+    g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_SD_CS, 0);     // Active LOW (Selected)
 +    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_SD_DET, 0); // SD_DET Input
-+    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_BUZZER, 1); // Buzzer Output
-+    g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_BUZZER, 0);    // Silent (LOW)
 +#endif
      
      bsp_btn_init_default();
@@ -249,10 +247,43 @@ index d432aa6..030ec58 100644
  )
  {
 diff --git a/components/bsp/src/storage/bsp_sdcard.c b/components/bsp/src/storage/bsp_sdcard.c
-index 40f3c5c..d2d2ef7 100644
+index 40f3c5c..aa23fa5 100644
 --- a/components/bsp/src/storage/bsp_sdcard.c
 +++ b/components/bsp/src/storage/bsp_sdcard.c
-@@ -73,7 +73,7 @@ esp_err_t bsp_sdcard_init(char *mount_point, size_t max_files)
+@@ -23,6 +23,32 @@
+ static sdmmc_card_t *card;
+ static const char *TAG = "bsp_sdcard";
+ 
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++#define EXPANDER_IO_SD_CS 11
++
++extern void bsp_spi_lock(void);
++extern void bsp_spi_unlock(void);
++
++static esp_err_t (*s_orig_sdspi_do_transaction)(int slot, sdmmc_command_t *cmdinfo) = NULL;
++
++static esp_err_t wxm_sdspi_do_transaction(int slot, sdmmc_command_t *cmdinfo)
++{
++    bsp_spi_lock();
++    const board_res_desc_t *brd = bsp_board_get_description();
++    if (brd && brd->io_expander_ops && brd->io_expander_ops->set_level) {
++        brd->io_expander_ops->set_level(EXPANDER_IO_SD_CS, 0); // Assert SD CS (active LOW)
++    }
++
++    esp_err_t ret = s_orig_sdspi_do_transaction(slot, cmdinfo);
++
++    if (brd && brd->io_expander_ops && brd->io_expander_ops->set_level) {
++        brd->io_expander_ops->set_level(EXPANDER_IO_SD_CS, 1); // Deassert SD CS (inactive HIGH)
++    }
++    bsp_spi_unlock();
++    return ret;
++}
++#endif
++
+ esp_err_t bsp_sdcard_init(char *mount_point, size_t max_files)
+ {
+     if (NULL != card) {
+@@ -73,10 +99,16 @@ esp_err_t bsp_sdcard_init(char *mount_point, size_t max_files)
              .max_transfer_sz = 4000,
          };
          ret_val = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
@@ -261,6 +292,29 @@ index 40f3c5c..d2d2ef7 100644
              ESP_LOGE(TAG, "Failed to initialize bus.");
              return ret_val;
          }
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++        if (s_orig_sdspi_do_transaction == NULL) {
++            s_orig_sdspi_do_transaction = host.do_transaction;
++        }
++        host.do_transaction = wxm_sdspi_do_transaction;
++#endif
+     }
+ 
+     /**
+@@ -144,6 +176,13 @@ esp_err_t bsp_sdcard_deinit(char *mount_point)
+     /* Unmount an SD card from the FAT filesystem and release resources acquired */
+     esp_err_t ret_val = esp_vfs_fat_sdcard_unmount(mount_point, card);
+ 
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    const board_res_desc_t *brd = bsp_board_get_description();
++    if (brd && brd->io_expander_ops && brd->io_expander_ops->set_level) {
++        brd->io_expander_ops->set_level(EXPANDER_IO_SD_CS, 1);
++    }
++#endif
++
+     /* Make SD/MMC card information structure pointer NULL */
+     card = NULL;
+ 
 diff --git a/components/i2c_devices/touch_panel/ft5x06.c b/components/i2c_devices/touch_panel/ft5x06.c
 index ee52cb8..dde54ca 100644
 --- a/components/i2c_devices/touch_panel/ft5x06.c
@@ -729,10 +783,10 @@ index 16a2484..b1379d1 100644
  /*!
   * \brief Radio driver
 diff --git a/components/lora/sx126x_sensecap_board.c b/components/lora/sx126x_sensecap_board.c
-index d3418ac..915fa91 100644
+index d3418ac..d97a413 100644
 --- a/components/lora/sx126x_sensecap_board.c
 +++ b/components/lora/sx126x_sensecap_board.c
-@@ -1,481 +1,599 @@
+@@ -1,481 +1,587 @@
 -#include <stdlib.h>
 -#include "bsp_sx126x.h"
 -#include "radio.h"
@@ -1412,8 +1466,6 @@ index d3418ac..915fa91 100644
 +    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_DIO_1, 0); //input
 +#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
 +    g_have_tcxo = false;
-+    indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 0);
-+    indicator_io_expander->set_direction(EXPANDER_IO_SD_CS, 1);
 +#else
 +    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_VER, 0); //input
 +
@@ -1593,17 +1645,7 @@ index d3418ac..915fa91 100644
 +
 +static inline void sx1262_nss_set(bool level)
 +{
-+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
-+    if (level == 0) {
-+        indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 1);     // Deselect SD
-+        indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0); // Select LoRa
-+    } else {
-+        indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1); // Deselect LoRa
-+        indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 0);     // Select SD
-+    }
-+#else
 +    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, level ? 1 : 0);
-+#endif
 +}
 +
 +void bsp_spi_lock(void)
