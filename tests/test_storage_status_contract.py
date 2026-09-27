@@ -1180,8 +1180,8 @@ def test_storage_map_tile_canary_is_serial_only_and_uses_atomic_sd_file_ops():
 
 
 def test_current_d1l_bsp_keeps_esp32_direct_sd_disabled():
-    board = read("third_party/sensecap_indicator_esp32/components/bsp/src/boards/sensecap_indicator_board.c")
-    bsp_sd = read("third_party/sensecap_indicator_esp32/components/bsp/src/storage/bsp_sdcard.c")
+    board = read("components/bsp/src/boards/sensecap_indicator_board.c")
+    bsp_sd = read("components/bsp/src/storage/bsp_sdcard.c")
     readme = read("README.md")
 
     assert ".FUNC_SDMMC_EN =   (0)" in board

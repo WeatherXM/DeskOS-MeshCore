@@ -53,71 +53,8 @@ if(NOT DEFINED PROJECT_VER)
     endif()
 endif()
 
-set(SEEED_BSP_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/sensecap_indicator_esp32")
-set(SEEED_BSP_TOUCH_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_touch_fix.patch")
-set(SEEED_BSP_IDF55_COMPAT_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_idf55_compat.patch")
-set(SEEED_BSP_TX_ORIGIN_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_tx_origin.patch")
-set(SEEED_BSP_AIRTIME_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_airtime.patch")
-set(SEEED_BSP_WXM_SUPPORT_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_wxm_support.patch")
-set(SEEED_BSP_PATCHES
-    "${SEEED_BSP_TOUCH_PATCH}"
-    "${SEEED_BSP_IDF55_COMPAT_PATCH}"
-    "${SEEED_BSP_TX_ORIGIN_PATCH}"
-    "${SEEED_BSP_AIRTIME_PATCH}"
-    "${SEEED_BSP_WXM_SUPPORT_PATCH}"
-)
+# Vendored BSP and hardware components are located in components/
 
-foreach(SEEED_BSP_PATCH IN LISTS SEEED_BSP_PATCHES)
-    get_filename_component(SEEED_BSP_PATCH_NAME "${SEEED_BSP_PATCH}" NAME)
-    if(NOT EXISTS "${SEEED_BSP_PATCH}")
-        message(FATAL_ERROR "Required Seeed BSP patch is missing: ${SEEED_BSP_PATCH_NAME}")
-    endif()
-
-    execute_process(
-        COMMAND git apply --unidiff-zero --check --ignore-space-change "${SEEED_BSP_PATCH}"
-        WORKING_DIRECTORY "${SEEED_BSP_DIR}"
-        RESULT_VARIABLE SEEED_BSP_PATCH_APPLIES
-        OUTPUT_QUIET
-        ERROR_QUIET
-    )
-    if(SEEED_BSP_PATCH_APPLIES EQUAL 0)
-        execute_process(
-            COMMAND git apply --unidiff-zero --ignore-space-change "${SEEED_BSP_PATCH}"
-            WORKING_DIRECTORY "${SEEED_BSP_DIR}"
-            RESULT_VARIABLE SEEED_BSP_PATCH_RESULT
-            OUTPUT_VARIABLE SEEED_BSP_PATCH_OUTPUT
-            ERROR_VARIABLE SEEED_BSP_PATCH_ERROR
-        )
-        if(NOT SEEED_BSP_PATCH_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to apply Seeed BSP patch ${SEEED_BSP_PATCH_NAME}: ${SEEED_BSP_PATCH_ERROR}")
-        endif()
-        message(STATUS "Applied Seeed BSP patch: ${SEEED_BSP_PATCH_NAME}")
-    else()
-        execute_process(
-            COMMAND git apply --unidiff-zero --reverse --check --ignore-space-change "${SEEED_BSP_PATCH}"
-            WORKING_DIRECTORY "${SEEED_BSP_DIR}"
-            RESULT_VARIABLE SEEED_BSP_PATCH_REVERSES
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-        if(SEEED_BSP_PATCH_REVERSES EQUAL 0)
-            message(STATUS "Seeed BSP patch already applied: ${SEEED_BSP_PATCH_NAME}")
-        else()
-            message(STATUS "Seeed BSP patch already applied (stacked): ${SEEED_BSP_PATCH_NAME}")
-        endif()
-    endif()
-endforeach()
-
-set(SEEED_COMPONENT_DIR "${CMAKE_CURRENT_LIST_DIR}/third_party/sensecap_indicator_esp32/components")
-
-list(APPEND EXTRA_COMPONENT_DIRS
-    "${SEEED_COMPONENT_DIR}/bsp"
-    "${SEEED_COMPONENT_DIR}/bus"
-    "${SEEED_COMPONENT_DIR}/i2c_devices"
-    "${SEEED_COMPONENT_DIR}/iot_button"
-    "${SEEED_COMPONENT_DIR}/lora"
-    "${SEEED_COMPONENT_DIR}/lvgl"
-)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(meshcore_deskos_d1l)

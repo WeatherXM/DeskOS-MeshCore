@@ -19,16 +19,9 @@ def c_function(source, name):
     return source[match.start():end]
 
 
-def test_valid_slow_frames_fit_hardware_and_owner_deadlines(tmp_path):
-    bsp = ROOT / "third_party/sensecap_indicator_esp32"
-    # Start from pinned vendor bytes even if the build worktree is patched.
-    original = subprocess.check_output(["git", "show", "HEAD:components/lora/radio.c"], cwd=bsp)
-    target = tmp_path / "components/lora/radio.c"
-    target.parent.mkdir(parents=True)
-    target.write_bytes(original)
-    subprocess.run(["git", "apply", "--unidiff-zero", "--ignore-space-change",
-                    str(ROOT / "patches/sensecap_indicator_airtime.patch")], cwd=tmp_path, check=True)
-    driver = target.read_text()
+def test_valid_slow_frames_fit_hardware_and_owner_deadlines():
+    driver = (ROOT / "components/lora/radio.c").read_text()
+
     service = (ROOT / "main/mesh/meshcore_service.c").read_text()
     bandwidths = re.search(r"const RadioLoRaBandwidths_t Bandwidths\[\]\s*=\s*\{[^}]+\};", driver)
     assert bandwidths

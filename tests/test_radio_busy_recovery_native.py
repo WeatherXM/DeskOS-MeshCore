@@ -18,16 +18,9 @@ def function(source, name):
 
 
 def patched_driver(tmp_path):
-    bsp = ROOT / "third_party/sensecap_indicator_esp32"
-    for name in ["radio.c", "radio.h", "sx126x_sensecap_board.c", "bsp_sx126x.h"]:
-        relative = "components/lora/" + name
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(subprocess.check_output(["git", "show", "HEAD:" + relative], cwd=bsp))
-    for patch in ["sensecap_indicator_idf55_compat.patch", "sensecap_indicator_tx_origin.patch", "sensecap_indicator_airtime.patch"]:
-        subprocess.run(["git", "apply", "--unidiff-zero", "--ignore-space-change", "--include=components/lora/*",
-                        str(ROOT / "patches" / patch)], cwd=tmp_path, check=True)
-    return tmp_path / "components/lora"
+    del tmp_path
+    return ROOT / "components/lora"
+
 
 
 def compile_run(tmp_path, code):

@@ -29,7 +29,7 @@ void lodepng_free(void *ptr)
     heap_caps_free(ptr);
 }
 
-#include "../../third_party/sensecap_indicator_esp32/components/lvgl/src/extra/libs/png/lodepng.c"
+#include "../../components/lvgl/src/extra/libs/png/lodepng.c"
 
 static uint8_t clamp_u8(int32_t value)
 {

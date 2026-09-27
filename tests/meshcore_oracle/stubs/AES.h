@@ -9,7 +9,7 @@
 #endif
 
 extern "C" {
-#include "../../../third_party/sensecap_indicator_esp32/components/LoRaWAN/soft-se/aes.h"
+#include "../../../components/LoRaWAN/soft-se/aes.h"
 }
 
 /*
