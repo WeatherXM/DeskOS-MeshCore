@@ -80,6 +80,27 @@ def filesystem_type(path: Path) -> str:
         )
         return fs_buffer.value.lower() if ok else ""
 
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            ["diskutil", "info", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "File System Personality:" in line:
+                    val = line.split(":", 1)[1].strip().lower()
+                    if "fat32" in val or "ms-dos" in val:
+                        return "fat32"
+                    return val
+                elif "Type (Bundle):" in line:
+                    val = line.split(":", 1)[1].strip().lower()
+                    if "msdos" in val:
+                        return "fat32"
+                    return val
+        return ""
+
     result = subprocess.run(
         ["findmnt", "-n", "-o", "FSTYPE", "--target", str(path)],
         check=False,

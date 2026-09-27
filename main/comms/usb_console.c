@@ -36,6 +36,8 @@
 #include "hal/indicator_board.h"
 #include "hal/rp2040_bridge.h"
 #include "hal/sx1262_indicator.h"
+#include "hal/bmp390_sensor.h"
+#include "hal/buzzer.h"
 #include "mesh/contact_store.h"
 #include "mesh/dm_delivery_state.h"
 #include "mesh/dm_store.h"
@@ -1329,7 +1331,7 @@ static void cmd_version(void)
     const char *recovery = time_protocol_recovery(&time_status);
     const char *tx_block = time_protocol_tx_block(&time_status);
     ok_begin("version");
-    printf(",\"firmware\":\"%s\",\"version\":\"%s\",\"build_commit\":\"%s\","
+    printf(",\"firmware\":\"%s\",\"version\":\"%s\",\"target\":\"%s\",\"manufacturer\":\"%s\",\"product\":\"%s\",\"build_commit\":\"%s\","
            "\"idf\":\"%s\",\"release_profile\":\"%s\","
            "\"release_profile_id\":%u,\"sd_history_mode\":\"%s\","
            "\"sd_history_mode_id\":%u,\"meshcore_ca_desk_mode\":true,"
@@ -1372,7 +1374,7 @@ static void cmd_version(void)
            "\"write_count\":%lu,\"skip_count\":%lu,"
            "\"failure_count\":%lu,\"retry_not_before_us\":%" PRIu64
            "}}}\n",
-           D1L_FIRMWARE_NAME, D1L_FIRMWARE_VERSION, D1L_BUILD_GIT_COMMIT,
+           D1L_FIRMWARE_NAME, D1L_FIRMWARE_VERSION, D1L_TARGET_NAME, D1L_MANUFACTURER, D1L_PRODUCT_NAME, D1L_BUILD_GIT_COMMIT,
            esp_get_idf_version(), d1l_release_profile_name(),
            (unsigned)d1l_release_profile_id(),
            d1l_release_sd_history_mode_name(),
@@ -1513,7 +1515,8 @@ static void cmd_board(void)
 {
     const d1l_board_status_t *status = d1l_board_status();
     ok_begin("board");
-    printf(",\"target\":\"seeed_indicator_d1l\",\"ready\":%s,\"init_result\":\"%s\",\"display\":{\"width\":480,\"height\":480},\"button_gpio\":38,\"backlight_gpio\":45}\n",
+    printf(",\"target\":\"%s\",\"manufacturer\":\"%s\",\"product\":\"%s\",\"ready\":%s,\"init_result\":\"%s\",\"display\":{\"width\":480,\"height\":480},\"button_gpio\":38,\"backlight_gpio\":45}\n",
+           D1L_TARGET_NAME, D1L_MANUFACTURER, D1L_PRODUCT_NAME,
            status->ready ? "true" : "false", esp_err_to_name(status->init_result));
 }
 
@@ -1620,15 +1623,18 @@ static void cmd_settings_onboarding_status(void)
     d1l_settings_t settings_snapshot = {0};
     (void)d1l_settings_public_snapshot(&settings_snapshot);
     const d1l_settings_t *settings = &settings_snapshot;
+    const d1l_radio_profile_t radio_profile = d1l_settings_radio_profile(settings);
     ok_begin("settings onboarding status");
     print_release_profile_fields();
     printf(",\"complete\":%s,\"node_name\":\"%s\",\"role\":\"%s\","
-           "\"region\":\"Canada/USA\","
-           "\"radio_profile\":\"uscan-meshcore-default\","
+           "\"region\":\"%s\","
+           "\"radio_profile\":\"%s\","
            "\"wifi_enabled\":%s,\"ble_companion_enabled\":%s,"
            "\"observer_enabled\":%s}\n",
            bool_json(settings->onboarding_complete), settings->node_name,
            d1l_settings_role_name(settings->role),
+           radio_profile.region_label ? radio_profile.region_label : D1L_RADIO_REGION_LABEL,
+           radio_profile.profile_id ? radio_profile.profile_id : D1L_RADIO_PROFILE_ID,
            bool_json(
                d1l_release_feature_available(
                    D1L_RELEASE_FEATURE_WIFI_USER_CONTROL) &&
@@ -2294,6 +2300,40 @@ static void cmd_backlight(const char *line)
     printf(",\"percent\":%d}\n", percent);
 }
 
+static void cmd_sensors(void)
+{
+    float pressure = 0.0f;
+    float temp = 0.0f;
+    esp_err_t ret = d1l_bmp390_read(&pressure, &temp);
+    if (ret != ESP_OK) {
+        d1l_bmp390_reading_t cached;
+        if (d1l_bmp390_get_latest(&cached)) {
+            ok_begin("sensors");
+            printf(",\"bmp390\":{\"present\":true,\"pressure_hpa\":%.2f,\"temperature_c\":%.2f,\"stale\":true}}\n",
+                   cached.pressure_hpa, cached.temperature_c);
+            return;
+        }
+        err_result("sensors", esp_err_to_name(ret), "BMP390 read failed or not initialized");
+        return;
+    }
+    ok_begin("sensors");
+    printf(",\"bmp390\":{\"present\":true,\"pressure_hpa\":%.2f,\"temperature_c\":%.2f,\"stale\":false}}\n",
+           pressure, temp);
+}
+
+static void cmd_buzzer_beep(const char *line)
+{
+    int ms = 80;
+    const char *arg = line + strlen("beep");
+    while (*arg == ' ') arg++;
+    if (*arg != '\0') {
+        (void)d1l_usb_command_parse_int_exact(arg, &ms);
+    }
+    d1l_buzzer_beep(ms > 0 ? (uint32_t)ms : 80U);
+    ok_begin("beep");
+    printf(",\"duration_ms\":%d}\n", ms > 0 ? ms : 80);
+}
+
 static void cmd_radiohw(void)
 {
     d1l_radiohw_status_t status;
@@ -2327,6 +2367,26 @@ static void cmd_radio_get(void)
     print_radio_profile_result("radio get");
 }
 
+static void cmd_radio_set_preset_eu(void)
+{
+    d1l_settings_t settings = {0};
+    const d1l_radio_profile_t *defaults = d1l_radio_profile_eu_default();
+    settings.frequency_hz = defaults->frequency_hz;
+    settings.bandwidth_tenths_khz = (uint16_t)((defaults->bandwidth_khz * 10.0f) + 0.5f);
+    settings.spreading_factor = defaults->spreading_factor;
+    settings.coding_rate = defaults->coding_rate;
+    settings.tx_power_dbm = defaults->tx_power_dbm;
+    settings.rx_boost = defaults->rx_boost;
+    settings.tcxo_mode = D1L_TCXO_NONE;
+    esp_err_t ret = d1l_settings_update_fields(
+        &settings, D1L_SETTINGS_UPDATE_RADIO_PROFILE);
+    if (ret != ESP_OK) {
+        err_result("radio set preset eu", esp_err_to_name(ret), "could not persist Europe radio defaults");
+        return;
+    }
+    print_radio_profile_result("radio set preset eu");
+}
+
 static void cmd_radio_set_preset_uscan(void)
 {
     d1l_settings_t settings = {0};
@@ -2352,8 +2412,8 @@ static void cmd_radio_set_freq(const char *line)
     double mhz = 0.0;
     if (!d1l_usb_command_parse_double_exact(
             line + strlen("radio set freq "), &mhz) ||
-        mhz < 902.0 || mhz > 928.0) {
-        err_result("radio set freq", "INVALID_FREQ", "Canada/USA D1L range is 902.000-928.000 MHz");
+        !((mhz >= 863.0 && mhz <= 870.0) || (mhz >= 902.0 && mhz <= 928.0))) {
+        err_result("radio set freq", "INVALID_FREQ", "Allowed range is EU: 863.000-870.000 MHz, US/CA: 902.000-928.000 MHz");
         return;
     }
     d1l_settings_t settings = {0};
@@ -2433,7 +2493,7 @@ static void cmd_radio_set_txpower(const char *line)
     if (!d1l_usb_command_parse_int_exact(
             line + strlen("radio set txpower "), &tx_power) ||
         tx_power < -9 || tx_power > D1L_RADIO_TX_POWER_DBM) {
-        err_result("radio set txpower", "INVALID_TX_POWER", "usage: radio set txpower <-9-20>");
+        err_result("radio set txpower", "INVALID_TX_POWER", "usage: radio set txpower <-9-22>");
         return;
     }
     d1l_settings_t settings = {0};
@@ -2480,10 +2540,13 @@ static void cmd_mesh_status(void)
         (d1l_dm_delivery_state_t)status.dm_delivery_state;
     const bool user_trace_available =
         d1l_release_feature_available(D1L_RELEASE_FEATURE_USER_TRACE);
+    const d1l_radio_profile_t active_radio_profile = d1l_settings_radio_profile(NULL);
     ok_begin("mesh status");
     print_release_profile_fields();
-    printf(",\"phase\":\"phase2_public_rf\",\"state\":\"%s\",\"radio_profile\":\"uscan-meshcore-default\",\"identity_ready\":%s,\"radio_ready\":%s,\"companion_framing_ready\":%s,\"path_hash_bytes\":%u,\"rx_packets\":%lu,\"rx_adverts\":%lu,\"tx_packets\":%lu,\"rejected_commands\":%lu,\"ack_tx\":{\"queued\":%lu,\"done\":%lu,\"failed\":%lu,\"duplicate_rows_suppressed\":%lu,\"last_hash\":%lu,\"last_error\":\"%s\"},\"dm_route\":{\"direct_selected\":%lu,\"flood_selected\":%lu,\"missing_fallback\":%lu,\"preboot_fallback\":%lu,\"stale_fallback\":%lu,\"malformed_fallback\":%lu,\"expired_fallback\":%lu,\"failed_fallback\":%lu,\"direct_retry_fallback\":%lu,\"last_reason\":\"%s\",\"last_path_age_ms\":%lu}",
-           d1l_meshcore_service_state_name(status.state), bool_json(status.identity_ready),
+    printf(",\"phase\":\"phase2_public_rf\",\"state\":\"%s\",\"radio_profile\":\"%s\",\"identity_ready\":%s,\"radio_ready\":%s,\"companion_framing_ready\":%s,\"path_hash_bytes\":%u,\"rx_packets\":%lu,\"rx_adverts\":%lu,\"tx_packets\":%lu,\"rejected_commands\":%lu,\"ack_tx\":{\"queued\":%lu,\"done\":%lu,\"failed\":%lu,\"duplicate_rows_suppressed\":%lu,\"last_hash\":%lu,\"last_error\":\"%s\"},\"dm_route\":{\"direct_selected\":%lu,\"flood_selected\":%lu,\"missing_fallback\":%lu,\"preboot_fallback\":%lu,\"stale_fallback\":%lu,\"malformed_fallback\":%lu,\"expired_fallback\":%lu,\"failed_fallback\":%lu,\"direct_retry_fallback\":%lu,\"last_reason\":\"%s\",\"last_path_age_ms\":%lu}",
+           d1l_meshcore_service_state_name(status.state),
+           active_radio_profile.profile_id ? active_radio_profile.profile_id : D1L_RADIO_PROFILE_ID,
+           bool_json(status.identity_ready),
            bool_json(status.radio_ready), bool_json(status.companion_framing_ready),
            status.path_hash_bytes, (unsigned long)status.rx_packets,
            (unsigned long)status.rx_adverts, (unsigned long)status.tx_packets,
@@ -9044,9 +9107,9 @@ static void cmd_help(void)
 #endif
                "\"touch raw\",\"button\","
                "\"backlight <0-100>\",\"radiohw\",\"radio get\","
-               "\"radio set preset uscan\",\"radio set freq 910.525\","
-               "\"radio set bw 62.5\",\"radio set sf 7\","
-               "\"radio set cr 5\",\"radio set txpower 20\","
+               "\"radio set preset eu\",\"radio set preset uscan\",\"radio set freq 869.618\","
+               "\"radio set bw 62.5\",\"radio set sf 8\","
+               "\"radio set cr 8\",\"radio set txpower 22\","
                "\"radio set rxboost <0|1>\",\"ui status\","
                "\"ui tab <home|messages|nodes|packets|settings>\","
 #if D1L_ENABLE_QUALIFICATION_HOOKS
@@ -9126,9 +9189,9 @@ static void cmd_help(void)
            "\"display test\",\"touch test\","
 #endif
            "\"touch raw\",\"button\",\"backlight <0-100>\",\"radiohw\","
-           "\"radio get\",\"radio set preset uscan\",\"radio set freq 910.525\","
-           "\"radio set bw 62.5\",\"radio set sf 7\",\"radio set cr 5\","
-           "\"radio set txpower 20\",\"radio set rxboost <0|1>\",\"ui status\","
+           "\"radio get\",\"radio set preset eu\",\"radio set preset uscan\",\"radio set freq 869.618\","
+           "\"radio set bw 62.5\",\"radio set sf 8\",\"radio set cr 8\","
+           "\"radio set txpower 22\",\"radio set rxboost <0|1>\",\"ui status\","
            "\"ui tab <home|messages|nodes|map|packets|settings>\","
 #if D1L_ENABLE_QUALIFICATION_HOOKS
            "\"ui scroll-probe <home|public_messages|dm_thread|nodes|contact_detail|contact_options|contact_forget|contact_route|mesh_roles|mesh_rooms|mesh_repeaters|packets|settings|storage|storage_card|storage_data|wifi|map|map_options|map_location|map_cache>\","
@@ -9560,11 +9623,20 @@ static void handle_line(const d1l_usb_command_view_t *command)
         cmd_button();
     } else if (strncmp(line, "backlight ", 10) == 0) {
         cmd_backlight(line);
+    } else if (strcmp(line, "sensors") == 0) {
+        cmd_sensors();
+    } else if (strcmp(line, "beep") == 0 || strncmp(line, "beep ", 5) == 0) {
+        cmd_buzzer_beep(line);
     } else if (strcmp(line, "radiohw") == 0) {
         cmd_radiohw();
     } else if (strcmp(line, "radio get") == 0) {
         cmd_radio_get();
-    } else if (strcmp(line, "radio set preset uscan") == 0) {
+    } else if (strcmp(line, "radio set preset eu") == 0 ||
+               strcmp(line, "radio set preset eu868") == 0 ||
+               strcmp(line, "radio set preset europe") == 0) {
+        cmd_radio_set_preset_eu();
+    } else if (strcmp(line, "radio set preset uscan") == 0 ||
+               strcmp(line, "radio set preset us915") == 0) {
         cmd_radio_set_preset_uscan();
     } else if (strncmp(line, "radio set freq ", 15) == 0) {
         cmd_radio_set_freq(line);

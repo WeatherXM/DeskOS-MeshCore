@@ -1,0 +1,13 @@
+{
+  "profile_id": "eu868-meshcore-default",
+  "region_label": "Europe (868 MHz)",
+  "frequency_hz": 869618000,
+  "frequency_mhz": 869.618,
+  "bandwidth_khz": 62.5,
+  "spreading_factor": 8,
+  "coding_rate": 8,
+  "tx_power_dbm": 22,
+  "tcxo": "NONE",
+  "rx_boost": true,
+  "persistent_on_first_boot": true
+}

@@ -5,6 +5,7 @@
 
 #include "esp_err.h"
 #include "lvgl.h"
+#include "mesh/meshcore_radio_profile.h"
 #include "ui_keyboard.h"
 
 #define D1L_FIRST_START_COLOR_BACKGROUND 0x17191AU
@@ -461,16 +462,25 @@ static void render_wifi(d1l_ui_first_start_controller_t *controller)
 
 static void render_radio(d1l_ui_first_start_controller_t *controller)
 {
+    const d1l_radio_profile_t *def = d1l_radio_profile_default();
+    char title[48];
+    (void)snprintf(title, sizeof(title), "Confirm %s radio", def->region_label ? def->region_label : "MeshCore");
     begin_page(controller, D1L_UI_FIRST_START_RADIO);
-    create_header(controller, "Confirm Canadian radio", "STEP 4 OF 6");
+    create_header(controller, title, "STEP 4 OF 6");
     create_label(
         controller->overlay,
         "Recommended starting settings:",
         D1L_FIRST_START_COLOR_MUTED, 16, 82, 448, false);
+    char preset_text[128];
+    (void)snprintf(preset_text, sizeof(preset_text),
+                   "%.3f MHz\nBandwidth %.1f kHz\nSpreading factor %u\nCoding rate %u",
+                   ((double)def->frequency_hz) / 1000000.0,
+                   def->bandwidth_khz,
+                   def->spreading_factor,
+                   def->coding_rate);
     lv_obj_t *preset = create_label(
         controller->overlay,
-        "910.525 MHz\nBandwidth 62.5 kHz\nSpreading factor 7\n"
-        "Coding rate 5",
+        preset_text,
         D1L_FIRST_START_COLOR_TEXT, 24, 124, 432, true);
     if (preset) {
         lv_obj_set_style_text_font(preset, &lv_font_montserrat_24, 0);
@@ -483,7 +493,7 @@ static void render_radio(d1l_ui_first_start_controller_t *controller)
         D1L_FIRST_START_COLOR_MUTED, 16, 292, 448, true);
     controller->status_line = create_label(
         controller->overlay,
-        controller->radio_confirmed ? "Canadian preset saved." :
+        controller->radio_confirmed ? "Radio preset saved." :
             "Confirmation is required before setup can finish.",
         controller->radio_confirmed ? D1L_FIRST_START_COLOR_GREEN :
             D1L_FIRST_START_COLOR_AMBER,
@@ -514,9 +524,9 @@ static void render_storage_map(
         D1L_FIRST_START_COLOR_AMBER, 16, 302, 448, true);
     create_label(
         controller->overlay,
-        "Continue unlocks when the prepared card and offline maps are ready.",
+        "Next advances when ready. Skip proceeds without offline maps.",
         D1L_FIRST_START_COLOR_MUTED, 16, 370, 448, true);
-    create_navigation(controller, true, false, "Continue");
+    create_navigation(controller, true, true, "Next");
     if (controller->next_button && !controller->media_ready) {
         lv_obj_add_state(controller->next_button, LV_STATE_DISABLED);
         lv_obj_set_style_opa(
@@ -641,8 +651,13 @@ bool d1l_ui_first_start_sd_prepared(
 bool d1l_ui_first_start_map_prepared(
     const d1l_app_snapshot_t *snapshot)
 {
-    return d1l_ui_first_start_sd_prepared(snapshot) &&
-        snapshot->map_tile_cache_ready &&
+    if (!d1l_ui_first_start_sd_prepared(snapshot)) {
+        return false;
+    }
+    if (!snapshot->wifi_enabled) {
+        return true;
+    }
+    return snapshot->map_tile_cache_ready &&
         snapshot->map_tile_provider_configured;
 }
 
@@ -889,15 +904,15 @@ static void confirm_radio_and_advance(
 {
     d1l_app_radio_profile_edit_t profile = {0};
     d1l_app_model_default_radio_profile(&profile);
-    if (profile.frequency_hz !=
-            D1L_FIRST_START_CANADIAN_FREQUENCY_HZ ||
-        profile.bandwidth_tenths_khz !=
-            D1L_FIRST_START_CANADIAN_BANDWIDTH_TENTHS_KHZ ||
-        profile.spreading_factor != D1L_FIRST_START_CANADIAN_SF ||
-        profile.coding_rate != D1L_FIRST_START_CANADIAN_CR) {
+    const d1l_radio_profile_t *def = d1l_radio_profile_default();
+    const uint16_t def_bw_tenths = (uint16_t)((def->bandwidth_khz * 10.0f) + 0.5f);
+    if (profile.frequency_hz != def->frequency_hz ||
+        profile.bandwidth_tenths_khz != def_bw_tenths ||
+        profile.spreading_factor != def->spreading_factor ||
+        profile.coding_rate != def->coding_rate) {
         set_status(
             controller,
-            "The built-in radio preset does not match the required Canadian profile.",
+            "The built-in radio preset does not match the default profile.",
             D1L_FIRST_START_COLOR_RED);
         return;
     }
@@ -1006,6 +1021,8 @@ static void handle_skip(d1l_ui_first_start_controller_t *controller)
         }
         controller->offline_selected = true;
         render_radio(controller);
+    } else if (controller->stage == D1L_UI_FIRST_START_STORAGE_MAP) {
+        render_channels(controller);
     }
 }
 

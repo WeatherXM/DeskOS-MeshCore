@@ -225,6 +225,12 @@ bool d1l_ui_ble_render(d1l_ui_ble_controller_t *controller,
         invalidate_render(controller);
         return false;
     }
+    if (controller->generation != 0U &&
+        memcmp(&controller->rendered, view_model, sizeof(*view_model)) == 0) {
+        controller->action_handler = action_handler;
+        controller->action_context = action_context;
+        return true;
+    }
     deactivate_actions(controller);
     controller->rendered = *view_model;
     controller->action_handler = action_handler;

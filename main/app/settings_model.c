@@ -639,7 +639,9 @@ void d1l_settings_sanitize(d1l_settings_t *settings)
     if (settings->path_hash_bytes < 1 || settings->path_hash_bytes > 3) {
         settings->path_hash_bytes = 1;
     }
-    if (settings->frequency_hz < 902000000UL || settings->frequency_hz > 928000000UL) {
+    const bool valid_freq = (settings->frequency_hz >= 863000000UL && settings->frequency_hz <= 870000000UL) ||
+                            (settings->frequency_hz >= 902000000UL && settings->frequency_hz <= 928000000UL);
+    if (!valid_freq) {
         settings->frequency_hz = D1L_RADIO_FREQ_HZ;
     }
     if (settings->bandwidth_tenths_khz < 78 || settings->bandwidth_tenths_khz > 5000) {
@@ -2006,9 +2008,10 @@ d1l_radio_profile_t d1l_settings_radio_profile(const d1l_settings_t *settings)
         (void)d1l_settings_public_snapshot(&snapshot);
         src = &snapshot;
     }
+    const bool is_eu = (src->frequency_hz >= 863000000UL && src->frequency_hz <= 870000000UL);
     d1l_radio_profile_t profile = {
-        .profile_id = D1L_RADIO_PROFILE_ID,
-        .region_label = D1L_RADIO_REGION_LABEL,
+        .profile_id = is_eu ? D1L_RADIO_EU_PROFILE_ID : D1L_RADIO_USCAN_PROFILE_ID,
+        .region_label = is_eu ? D1L_RADIO_EU_REGION_LABEL : D1L_RADIO_USCAN_REGION_LABEL,
         .frequency_hz = src->frequency_hz,
         .bandwidth_khz = ((float)src->bandwidth_tenths_khz) / 10.0f,
         .spreading_factor = src->spreading_factor,

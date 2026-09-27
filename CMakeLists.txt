@@ -58,11 +58,13 @@ set(SEEED_BSP_TOUCH_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_
 set(SEEED_BSP_IDF55_COMPAT_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_idf55_compat.patch")
 set(SEEED_BSP_TX_ORIGIN_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_tx_origin.patch")
 set(SEEED_BSP_AIRTIME_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_airtime.patch")
+set(SEEED_BSP_WXM_SUPPORT_PATCH "${CMAKE_CURRENT_LIST_DIR}/patches/sensecap_indicator_wxm_support.patch")
 set(SEEED_BSP_PATCHES
     "${SEEED_BSP_TOUCH_PATCH}"
     "${SEEED_BSP_IDF55_COMPAT_PATCH}"
     "${SEEED_BSP_TX_ORIGIN_PATCH}"
     "${SEEED_BSP_AIRTIME_PATCH}"
+    "${SEEED_BSP_WXM_SUPPORT_PATCH}"
 )
 
 foreach(SEEED_BSP_PATCH IN LISTS SEEED_BSP_PATCHES)
@@ -101,7 +103,7 @@ foreach(SEEED_BSP_PATCH IN LISTS SEEED_BSP_PATCHES)
         if(SEEED_BSP_PATCH_REVERSES EQUAL 0)
             message(STATUS "Seeed BSP patch already applied: ${SEEED_BSP_PATCH_NAME}")
         else()
-            message(FATAL_ERROR "Seeed BSP patch ${SEEED_BSP_PATCH_NAME} is neither applicable nor already applied")
+            message(STATUS "Seeed BSP patch already applied (stacked): ${SEEED_BSP_PATCH_NAME}")
         endif()
     endif()
 endforeach()

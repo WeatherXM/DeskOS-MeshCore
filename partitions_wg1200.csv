@@ -1,0 +1,13 @@
+# ESP-IDF Partition Table for WeatherXM WG1200 (16MB Flash)
+# Matches stock bootloader layout (partition table at 0xc000)
+# Name,            Type, SubType, Offset,   Size,     Flags
+esp_secure_cert,   0x3f, 0x06,    0xd000,   0x2000,
+nvs,               data, nvs,     0xf000,   0x4000,
+otadata,           data, ota,     0x13000,  0x2000,
+phy_init,          data, phy,     0x15000,  0x1000,
+factory,           app,  factory, 0x20000,  0x400000,
+ota_0,             app,  ota_0,   0x420000, 0x400000,
+ota_1,             app,  ota_1,   0x820000, 0x400000,
+d1l_ret_meta,      data, 0x40,    0xc20000, 0x1000,
+d1l_retained,      data, nvs,     0xc21000, 0x1F000,
+spiffs,            data, spiffs,  0xc40000, 0x300000,

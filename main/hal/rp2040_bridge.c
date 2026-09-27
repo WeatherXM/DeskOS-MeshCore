@@ -14,6 +14,7 @@
 #include "hal/indicator_pins.h"
 #include "hal/rp2040_file_reply.h"
 #include "hal/rp2040_sd_reply.h"
+#include "storage/storage_wxm_sd.h"
 #include "tca9535.h"
 
 #define D1L_RP2040_UART_BUF_SIZE 4096
@@ -893,6 +894,11 @@ esp_err_t d1l_rp2040_bridge_init(void)
 {
     ensure_bridge_mutex();
 
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    s_status.init_result = ESP_OK;
+    s_status.uart_ready = true;
+    return ESP_OK;
+#else
     const d1l_rp2040_pins_t *pins = d1l_rp2040_pins();
     s_status.uart_port = pins->uart_port;
     s_status.tx_gpio = pins->esp_tx_gpio;
@@ -921,6 +927,7 @@ esp_err_t d1l_rp2040_bridge_init(void)
     s_status.init_result = ret;
     s_status.uart_ready = (ret == ESP_OK);
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_status(d1l_rp2040_status_t *out_status)
@@ -928,6 +935,12 @@ esp_err_t d1l_rp2040_bridge_status(d1l_rp2040_status_t *out_status)
     if (out_status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    memset(out_status, 0, sizeof(*out_status));
+    out_status->uart_ready = true;
+    out_status->init_result = ESP_OK;
+    return ESP_OK;
+#else
     if (s_status.uart_ready) {
         size_t buffered = 0;
         esp_err_t ret = uart_get_buffered_data_len((uart_port_t)s_status.uart_port, &buffered);
@@ -939,10 +952,15 @@ esp_err_t d1l_rp2040_bridge_status(d1l_rp2040_status_t *out_status)
     }
     *out_status = s_status;
     return s_status.init_result;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_set_baud(uint32_t baud)
 {
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)baud;
+    return ESP_OK;
+#else
     if (!supported_rp2040_baud(baud)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -966,10 +984,16 @@ esp_err_t d1l_rp2040_bridge_set_baud(uint32_t baud)
 done:
     give_bridge_lock();
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_reset(uint32_t hold_ms, uint32_t settle_ms)
 {
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)hold_ms;
+    (void)settle_ms;
+    return ESP_OK;
+#else
     const d1l_rp2040_pins_t *pins = d1l_rp2040_pins();
     const uint32_t hold = hold_ms > 0 ? hold_ms : 100U;
     const uint32_t settle = settle_ms > 0 ? settle_ms : 8000U;
@@ -996,10 +1020,17 @@ esp_err_t d1l_rp2040_bridge_reset(uint32_t hold_ms, uint32_t settle_ms)
 done:
     give_bridge_lock();
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_double_reset(uint32_t hold_ms, uint32_t gap_ms, uint32_t settle_ms)
 {
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)hold_ms;
+    (void)gap_ms;
+    (void)settle_ms;
+    return ESP_OK;
+#else
     const d1l_rp2040_pins_t *pins = d1l_rp2040_pins();
     const uint32_t hold = hold_ms > 0 ? hold_ms : 50U;
     const uint32_t gap = gap_ms > 0 ? gap_ms : 150U;
@@ -1032,6 +1063,7 @@ esp_err_t d1l_rp2040_bridge_double_reset(uint32_t hold_ms, uint32_t gap_ms, uint
 done:
     give_bridge_lock();
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_ping(d1l_rp2040_ping_t *out_ping, uint32_t timeout_ms)
@@ -1039,6 +1071,10 @@ esp_err_t d1l_rp2040_bridge_ping(d1l_rp2040_ping_t *out_ping, uint32_t timeout_m
     if (out_ping == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_ping(out_ping);
+#else
     if (!s_status.uart_ready) {
         init_ping(out_ping, s_status.init_result);
         return s_status.init_result;
@@ -1063,10 +1099,15 @@ esp_err_t d1l_rp2040_bridge_ping(d1l_rp2040_ping_t *out_ping, uint32_t timeout_m
     out_ping->response_truncated = truncated;
     out_ping->last_error = ret;
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_enter_bootloader(uint32_t timeout_ms)
 {
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     if (!s_status.uart_ready) {
         return s_status.init_result;
     }
@@ -1089,6 +1130,7 @@ esp_err_t d1l_rp2040_bridge_enter_bootloader(uint32_t timeout_ms)
         return ESP_FAIL;
     }
     return ESP_OK;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_stock_probe(d1l_rp2040_stock_probe_t *out_probe, uint32_t timeout_ms)
@@ -1096,6 +1138,11 @@ esp_err_t d1l_rp2040_bridge_stock_probe(d1l_rp2040_stock_probe_t *out_probe, uin
     if (out_probe == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    init_stock_probe(out_probe, ESP_ERR_NOT_SUPPORTED);
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     if (!s_status.uart_ready) {
         init_stock_probe(out_probe, s_status.init_result);
         return s_status.init_result;
@@ -1160,6 +1207,7 @@ esp_err_t d1l_rp2040_bridge_stock_probe(d1l_rp2040_stock_probe_t *out_probe, uin
 done:
     give_bridge_lock();
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_baud_probe(d1l_rp2040_baud_probe_t *out_probe, uint32_t timeout_ms)
@@ -1167,6 +1215,13 @@ esp_err_t d1l_rp2040_bridge_baud_probe(d1l_rp2040_baud_probe_t *out_probe, uint3
     if (out_probe == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    memset(out_probe, 0, sizeof(*out_probe));
+    out_probe->bridge_ready = true;
+    out_probe->last_error = ESP_ERR_NOT_SUPPORTED;
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     memset(out_probe, 0, sizeof(*out_probe));
     out_probe->bridge_ready = s_status.uart_ready;
     out_probe->original_baud = (uint32_t)s_status.baud_rate;
@@ -1241,6 +1296,7 @@ esp_err_t d1l_rp2040_bridge_baud_probe(d1l_rp2040_baud_probe_t *out_probe, uint3
         return restore_ret;
     }
     return ESP_OK;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_probe_sd(d1l_rp2040_sd_status_t *out_status, uint32_t timeout_ms)
@@ -1248,6 +1304,10 @@ esp_err_t d1l_rp2040_bridge_probe_sd(d1l_rp2040_sd_status_t *out_status, uint32_
     if (out_status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_probe(out_status);
+#else
     if (!s_status.uart_ready) {
         init_sd_status(out_status, s_status.init_result);
         return s_status.init_result;
@@ -1275,6 +1335,7 @@ esp_err_t d1l_rp2040_bridge_probe_sd(d1l_rp2040_sd_status_t *out_status, uint32_
     out_status->response_truncated = truncated;
     out_status->last_error = ret;
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_mount_sd(d1l_rp2040_sd_status_t *out_status, uint32_t timeout_ms)
@@ -1282,6 +1343,10 @@ esp_err_t d1l_rp2040_bridge_mount_sd(d1l_rp2040_sd_status_t *out_status, uint32_
     if (out_status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_mount(out_status);
+#else
     if (!s_status.uart_ready) {
         init_sd_status(out_status, s_status.init_result);
         return s_status.init_result;
@@ -1309,6 +1374,7 @@ esp_err_t d1l_rp2040_bridge_mount_sd(d1l_rp2040_sd_status_t *out_status, uint32_
     out_status->response_truncated = truncated;
     out_status->last_error = ret;
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_sd_diag(d1l_rp2040_sd_diag_t *out_diag, uint32_t timeout_ms)
@@ -1316,6 +1382,10 @@ esp_err_t d1l_rp2040_bridge_sd_diag(d1l_rp2040_sd_diag_t *out_diag, uint32_t tim
     if (out_diag == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_diag(out_diag);
+#else
     if (!s_status.uart_ready) {
         init_sd_diag(out_diag, s_status.init_result);
         return s_status.init_result;
@@ -1339,6 +1409,7 @@ esp_err_t d1l_rp2040_bridge_sd_diag(d1l_rp2040_sd_diag_t *out_diag, uint32_t tim
     out_diag->response_truncated = truncated;
     out_diag->last_error = ret;
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_stat(const char *path,
@@ -1348,6 +1419,10 @@ esp_err_t d1l_rp2040_bridge_file_stat(const char *path,
     if (!path || !out_result) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_stat(path, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     if (!encode_path(path, path64, sizeof(path64))) {
         init_file_result(out_result, ESP_ERR_INVALID_ARG);
@@ -1366,6 +1441,7 @@ esp_err_t d1l_rp2040_bridge_file_stat(const char *path,
     }
     return send_file_command(command, (size_t)command_len, request_id, "stat",
                              NULL, 0, out_result, timeout_ms);
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_read(const char *path,
@@ -1379,6 +1455,10 @@ esp_err_t d1l_rp2040_bridge_file_read(const char *path,
         max_len > D1L_RP2040_FILE_CHUNK_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_read(path, offset, out_data, max_len, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     if (!encode_path(path, path64, sizeof(path64))) {
         init_file_result(out_result, ESP_ERR_INVALID_ARG);
@@ -1401,6 +1481,7 @@ esp_err_t d1l_rp2040_bridge_file_read(const char *path,
         out_data, max_len, out_result, timeout_ms);
     return ret == ESP_OK ? d1l_rp2040_file_reply_bind_read(
                               out_result, offset, max_len) : ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_write(const char *path,
@@ -1414,6 +1495,10 @@ esp_err_t d1l_rp2040_bridge_file_write(const char *path,
     if (!path || !out_result || (len > 0 && !data) || len > D1L_RP2040_FILE_CHUNK_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_write(path, offset, data, len, truncate, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     char data64[D1L_RP2040_DATA64_MAX + 1U];
     char crc[9];
@@ -1441,6 +1526,7 @@ esp_err_t d1l_rp2040_bridge_file_write(const char *path,
         NULL, 0, out_result, timeout_ms);
     return ret == ESP_OK ? d1l_rp2040_file_reply_bind_write(
                               out_result, offset, len) : ret;
+#endif
 }
 
 static bool verified_put_continue(
@@ -1520,6 +1606,11 @@ esp_err_t d1l_rp2040_bridge_file_write_verified(
         len > UINT32_MAX || timeout_ms == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_write_verified(
+        path, data, len, expected_crc32, should_continue, continue_context, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     if (!encode_path(path, path64, sizeof(path64))) {
         init_file_result(out_result, ESP_ERR_INVALID_ARG);
@@ -1710,6 +1801,7 @@ verified_put_done:
     out_result->last_error = ret;
     give_bridge_lock();
     return ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_append(const char *path,
@@ -1721,6 +1813,10 @@ esp_err_t d1l_rp2040_bridge_file_append(const char *path,
     if (!path || !out_result || !data || len == 0 || len > D1L_RP2040_FILE_CHUNK_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_append(path, data, len, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     char data64[D1L_RP2040_DATA64_MAX + 1U];
     char crc[9];
@@ -1747,6 +1843,7 @@ esp_err_t d1l_rp2040_bridge_file_append(const char *path,
         NULL, 0, out_result, timeout_ms);
     return ret == ESP_OK ? d1l_rp2040_file_reply_bind_append(
                               out_result, len) : ret;
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_delete(const char *path,
@@ -1756,6 +1853,10 @@ esp_err_t d1l_rp2040_bridge_file_delete(const char *path,
     if (!path || !out_result) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_delete(path, out_result);
+#else
     char path64[D1L_RP2040_PATH64_MAX + 1U];
     if (!encode_path(path, path64, sizeof(path64))) {
         init_file_result(out_result, ESP_ERR_INVALID_ARG);
@@ -1774,6 +1875,7 @@ esp_err_t d1l_rp2040_bridge_file_delete(const char *path,
     }
     return send_file_command(command, (size_t)command_len, request_id, "delete",
                              NULL, 0, out_result, timeout_ms);
+#endif
 }
 
 esp_err_t d1l_rp2040_bridge_file_rename(const char *from_path,
@@ -1785,6 +1887,10 @@ esp_err_t d1l_rp2040_bridge_file_rename(const char *from_path,
     if (!from_path || !to_path || !out_result) {
         return ESP_ERR_INVALID_ARG;
     }
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    (void)timeout_ms;
+    return d1l_storage_wxm_sd_file_rename(from_path, to_path, replace, out_result);
+#else
     char from64[D1L_RP2040_PATH64_MAX + 1U];
     char to64[D1L_RP2040_PATH64_MAX + 1U];
     if (!encode_path(from_path, from64, sizeof(from64)) ||
@@ -1806,4 +1912,5 @@ esp_err_t d1l_rp2040_bridge_file_rename(const char *from_path,
     }
     return send_file_command(command, (size_t)command_len, request_id, "rename",
                              NULL, 0, out_result, timeout_ms);
+#endif
 }

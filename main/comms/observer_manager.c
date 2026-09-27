@@ -944,7 +944,7 @@ static void enqueue_status_payload(void)
         payload, sizeof(payload),
         "{\"status\":\"online\",\"timestamp\":\"%s\","
         "\"origin\":\"%s\",\"origin_id\":\"%s\","
-        "\"model\":\"seeed_indicator_d1l\","
+        "\"model\":\"" D1L_TARGET_NAME "\","
         "\"firmware_version\":\"%s\",\"client_version\":\"deskos/%s\","
         "\"repeat\":\"off\",\"stats\":{\"uptime_secs\":%lu,"
         "\"packets_sent\":%lu,\"packets_received\":%lu,"

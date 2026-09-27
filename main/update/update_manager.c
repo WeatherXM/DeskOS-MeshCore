@@ -23,6 +23,7 @@
 #include "mesh/route_store_worker.h"
 #include "nvs.h"
 #include "storage/storage_status.h"
+#include "d1l_config.h"
 #include "update_signing_key.h"
 
 #include "ed_25519.h"
@@ -40,8 +41,8 @@
 #define D1L_UPDATE_MIN_INTERNAL_HEAP_BYTES 32768U
 #define D1L_UPDATE_PROJECT_NAME "meshcore_deskos_d1l"
 #define D1L_UPDATE_MANIFEST_HEADER "D1L-UPDATE-MANIFEST-V1"
-#define D1L_UPDATE_PRODUCT "MeshCore DeskOS D1L"
-#define D1L_UPDATE_TARGET "seeed_indicator_d1l"
+#define D1L_UPDATE_PRODUCT D1L_PRODUCT_NAME
+#define D1L_UPDATE_TARGET D1L_TARGET_NAME
 
 typedef struct {
     char product[32];

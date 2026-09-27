@@ -1085,13 +1085,13 @@ static esp_err_t ensure_wifi_started(void)
             if (ret != ESP_OK) {
                 return fail_closed_wifi_runtime(ret, esp_err_to_name(ret));
             }
-            ret = esp_wifi_set_default_wifi_sta_handlers();
+            ret = ok_if_invalid_state(esp_wifi_set_default_wifi_sta_handlers());
             if (ret != ESP_OK) {
                 return fail_closed_wifi_runtime(ret, esp_err_to_name(ret));
             }
         }
         wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        ret = esp_wifi_init(&cfg);
+        ret = ok_if_invalid_state(esp_wifi_init(&cfg));
         if (ret != ESP_OK) {
             return fail_closed_wifi_runtime(ret, esp_err_to_name(ret));
         }
@@ -1564,6 +1564,10 @@ esp_err_t d1l_connectivity_wifi_scan(d1l_wifi_scan_result_t *out_result)
         out_result->reason = "scan_cancelled";
         out_result->last_error = ESP_ERR_INVALID_STATE;
         return ESP_ERR_INVALID_STATE;
+    }
+    if (s_wifi_connecting) {
+        (void)esp_wifi_disconnect();
+        s_wifi_connecting = false;
     }
     ret = esp_wifi_scan_start(NULL, true);
     if (ret != ESP_OK) {

@@ -439,7 +439,6 @@ static void update_security(uint16_t connection_handle)
     struct ble_gap_conn_desc desc = {0};
     const bool authorized =
         connection_authorized(connection_handle, &desc);
-    bool should_terminate = false;
     bool should_pump = false;
     portENTER_CRITICAL(&s_lock);
     if (s_connected && s_connection_handle == connection_handle) {
@@ -449,20 +448,16 @@ static void update_security(uint16_t connection_handle)
         s_notification_enabled =
             authorized && s_notification_requested;
         if (authorized) {
+            s_pairing_passkey = 0U;
             s_state = s_notification_enabled ?
                 D1L_BLE_STATE_READY : D1L_BLE_STATE_CONNECTED;
             should_pump = s_notification_enabled;
         } else {
-            s_security_reject_count++;
             s_state = D1L_BLE_STATE_PAIRING;
-            should_terminate = desc.sec_state.encrypted;
         }
     }
     portEXIT_CRITICAL(&s_lock);
-    if (should_terminate) {
-        (void)ble_gap_terminate(connection_handle,
-                                BLE_ERR_REM_USER_CONN_TERM);
-    } else if (should_pump) {
+    if (should_pump) {
         pump_tx();
     }
 }
@@ -501,10 +496,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         {
             const int rc =
                 ble_gap_security_initiate(event->connect.conn_handle);
-            if (rc != 0) {
+            if (rc != 0 && rc != BLE_HS_EALREADY) {
                 note_nimble_error(rc);
-                (void)ble_gap_terminate(event->connect.conn_handle,
-                                        BLE_ERR_REM_USER_CONN_TERM);
             }
         }
         return 0;
@@ -512,6 +505,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         portENTER_CRITICAL(&s_lock);
         s_advertising = false;
         s_disconnect_count++;
+        s_last_nimble_error = event->disconnect.reason;
         reset_connection_locked();
         s_state = s_start_requested ?
             D1L_BLE_STATE_STARTING : D1L_BLE_STATE_OFF;
@@ -560,7 +554,20 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         }
         return 0;
     case BLE_GAP_EVENT_PASSKEY_ACTION:
-        if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+        if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
+            struct ble_sm_io passkey = {
+                .action = BLE_SM_IOACT_NUMCMP,
+                .numcmp_accept = 1,
+            };
+            portENTER_CRITICAL(&s_lock);
+            s_pairing_passkey = event->passkey.params.numcmp;
+            portEXIT_CRITICAL(&s_lock);
+            const int rc = ble_sm_inject_io(event->passkey.conn_handle,
+                                            &passkey);
+            if (rc != 0) {
+                note_nimble_error(rc);
+            }
+        } else if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
             struct ble_sm_io passkey = {
                 .action = BLE_SM_IOACT_DISP,
                 .passkey = D1L_BLE_COMPANION_STATIC_PASSKEY,
@@ -568,6 +575,25 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             portENTER_CRITICAL(&s_lock);
             s_pairing_passkey = D1L_BLE_COMPANION_STATIC_PASSKEY;
             portEXIT_CRITICAL(&s_lock);
+            const int rc = ble_sm_inject_io(event->passkey.conn_handle,
+                                            &passkey);
+            if (rc != 0) {
+                note_nimble_error(rc);
+            }
+        } else if (event->passkey.params.action == BLE_SM_IOACT_INPUT) {
+            struct ble_sm_io passkey = {
+                .action = BLE_SM_IOACT_INPUT,
+                .passkey = D1L_BLE_COMPANION_STATIC_PASSKEY,
+            };
+            const int rc = ble_sm_inject_io(event->passkey.conn_handle,
+                                            &passkey);
+            if (rc != 0) {
+                note_nimble_error(rc);
+            }
+        } else if (event->passkey.params.action == BLE_SM_IOACT_NONE) {
+            struct ble_sm_io passkey = {
+                .action = BLE_SM_IOACT_NONE,
+            };
             const int rc = ble_sm_inject_io(event->passkey.conn_handle,
                                             &passkey);
             if (rc != 0) {
@@ -588,13 +614,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 event->repeat_pairing.conn_handle, &desc);
             if (rc != 0) {
                 note_nimble_error(rc);
-                return BLE_GAP_REPEAT_PAIRING_IGNORE;
+                return BLE_GAP_REPEAT_PAIRING_RETRY;
             }
             const int delete_rc = ble_store_util_delete_peer(
                 &desc.peer_id_addr);
             if (delete_rc != 0) {
                 note_nimble_error(delete_rc);
-                return BLE_GAP_REPEAT_PAIRING_IGNORE;
             }
             return BLE_GAP_REPEAT_PAIRING_RETRY;
         }
@@ -732,19 +757,19 @@ esp_err_t d1l_ble_companion_stop(void)
     }
     int rc = nimble_port_stop();
     if (rc == 0) {
+        vTaskDelay(pdMS_TO_TICKS(50));
         rc = nimble_port_deinit();
     }
 
     portENTER_CRITICAL(&s_lock);
     s_advertising = false;
     reset_connection_locked();
+    s_stack_initialized = false;
+    s_state = D1L_BLE_STATE_OFF;
     if (rc == 0) {
-        s_stack_initialized = false;
-        s_state = D1L_BLE_STATE_OFF;
         s_last_error = ESP_OK;
         s_last_nimble_error = 0;
     } else {
-        s_state = D1L_BLE_STATE_ERROR;
         s_last_error = ESP_FAIL;
         s_last_nimble_error = rc;
     }

@@ -566,26 +566,38 @@ static void apply_rp2040_sd_status(const d1l_rp2040_sd_status_t *sd)
 
     if (!sd->bridge_ready) {
         s_status.setup_action = "bridge_unavailable";
-        s_status.note = "RP2040 UART bridge is unavailable; live RF and chat continue but history is not saved";
+        s_status.note = s_status.direct_supported ?
+            "Direct SD storage interface is unavailable; live RF and chat continue but history is not saved" :
+            "RP2040 UART bridge is unavailable; live RF and chat continue but history is not saved";
     } else if (!sd->protocol_supported) {
         s_status.setup_action = "bridge_protocol_pending";
-        s_status.note = "RP2040 UART is ready, but the DeskOS SD status protocol is not implemented on the bridge yet";
+        s_status.note = s_status.direct_supported ?
+            "Storage interface is ready, but SD protocol is not initialized yet" :
+            "RP2040 UART is ready, but the DeskOS SD status protocol is not implemented on the bridge yet";
     } else if (strcmp(s_status.sd_state, "mount_required") == 0) {
         s_status.setup_action = "run_storage_mount";
-        s_status.note = "RP2040 SD bridge is ready; run storage mount to check the inserted card before enabling SD data storage";
+        s_status.note = s_status.direct_supported ?
+            "MicroSD is inserted; run storage mount to check the inserted card before enabling SD data storage" :
+            "RP2040 SD bridge is ready; run storage mount to check the inserted card before enabling SD data storage";
     } else if (strcmp(s_status.sd_state, "mount_pending") == 0) {
         s_status.setup_action = "wait_for_storage_mount";
-        s_status.note = "RP2040 SD bridge is checking the inserted card; history is live-only until the mount completes";
+        s_status.note = "Checking the inserted card; history is live-only until the mount completes";
     } else if (probe_rejected_card) {
-        s_status.setup_action = "inspect_rp2040_sd_cmd0_firmware_path";
-        s_status.note =
+        s_status.setup_action = s_status.direct_supported ?
+            "inspect_sd_probe_error" : "inspect_rp2040_sd_cmd0_firmware_path";
+        s_status.note = s_status.direct_supported ?
+            "SD probe rejected the card init response; inspect diagnostics before changing the card" :
             "RP2040 SD probe rejected the card init response; inspect firmware CMD0/CMD8 diagnostics before changing the card";
     } else if (explicit_no_card) {
         s_status.setup_action = "insert_card";
-        s_status.note = "No SD card reported by the RP2040 bridge; live RF and chat continue but history is not saved";
+        s_status.note = s_status.direct_supported ?
+            "No SD card detected in slot; live RF and chat continue but history is not saved" :
+            "No SD card reported by the RP2040 bridge; live RF and chat continue but history is not saved";
     } else if (mount_failed_with_diag) {
-        s_status.setup_action = "inspect_rp2040_sd_mount_error_firmware_path";
-        s_status.note =
+        s_status.setup_action = s_status.direct_supported ?
+            "inspect_sd_mount_error" : "inspect_rp2040_sd_mount_error_firmware_path";
+        s_status.note = s_status.direct_supported ?
+            "The last confirmed card is not mounted; inspect mount diagnostics while history remains live-only" :
             "The last confirmed card is not mounted; inspect RP2040 mount diagnostics while history remains live-only";
     } else if (presence_stale) {
         s_status.setup_action = "wait_for_storage_reconnect";
@@ -709,6 +721,13 @@ esp_err_t d1l_storage_status_init(void)
     s_status.sd_state = "pending_bridge";
     s_status.note =
         "D1L microSD uses the RP2040 bridge; history remains live-only until that bridge is ready";
+#elif CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+    s_status.direct_supported = true;
+    s_status.rp2040_bridge_required = false;
+    s_status.sd_interface = "direct_spi";
+    s_status.sd_state = "pending_probe";
+    s_status.note =
+        "WeatherXM WG1200: direct SDSPI microSD backend";
 #else
     s_status.direct_supported = false;
     s_status.rp2040_bridge_required = false;
@@ -758,7 +777,7 @@ esp_err_t d1l_storage_status_refresh(uint32_t timeout_ms)
         (void)d1l_storage_status_init();
     }
 
-    if (!s_status.rp2040_bridge_required) {
+    if (!s_status.rp2040_bridge_required && !s_status.direct_supported) {
         s_status.last_error = ESP_ERR_NOT_SUPPORTED;
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -1218,12 +1237,13 @@ esp_err_t d1l_storage_manager_start(void)
     if (s_storage_manager_task) {
         return ESP_OK;
     }
-    BaseType_t created = xTaskCreate(storage_manager_task,
-                                     "storage_manager",
-                                     D1L_STORAGE_MANAGER_STACK_BYTES,
-                                     NULL,
-                                     3,
-                                     &s_storage_manager_task);
+    BaseType_t created = xTaskCreatePinnedToCore(storage_manager_task,
+                                                 "storage_manager",
+                                                 D1L_STORAGE_MANAGER_STACK_BYTES,
+                                                 NULL,
+                                                 2,
+                                                 &s_storage_manager_task,
+                                                 0);
     s_status.manager_running = created == pdPASS;
     return created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
@@ -1346,7 +1366,7 @@ static esp_err_t storage_status_mount(uint32_t timeout_ms, bool force_bridge_mou
         (void)d1l_storage_status_init();
     }
 
-    if (!s_status.rp2040_bridge_required) {
+    if (!s_status.rp2040_bridge_required && !s_status.direct_supported) {
         s_status.last_error = ESP_ERR_NOT_SUPPORTED;
         return ESP_ERR_NOT_SUPPORTED;
     }
@@ -1391,7 +1411,7 @@ esp_err_t d1l_storage_status_remount_blocking(
     const int64_t deadline_us = esp_timer_get_time() +
                                 ((int64_t)timeout_ms * 1000LL);
 
-    if (!s_status.rp2040_bridge_required) {
+    if (!s_status.rp2040_bridge_required && !s_status.direct_supported) {
         s_status.last_error = ESP_ERR_NOT_SUPPORTED;
         return ESP_ERR_NOT_SUPPORTED;
     }

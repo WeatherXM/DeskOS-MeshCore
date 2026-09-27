@@ -15,5 +15,9 @@ typedef struct {
     bool rx_boost;
 } d1l_radio_profile_t;
 
+const d1l_radio_profile_t *d1l_radio_profile_default(void);
+const d1l_radio_profile_t *d1l_radio_profile_eu_default(void);
 const d1l_radio_profile_t *d1l_radio_profile_uscan_default(void);
+bool d1l_radio_profile_is_safe(const d1l_radio_profile_t *profile);
+bool d1l_radio_profile_is_safe_eu(const d1l_radio_profile_t *profile);
 bool d1l_radio_profile_is_safe_uscan(const d1l_radio_profile_t *profile);

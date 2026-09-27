@@ -308,6 +308,16 @@ bool d1l_ui_wifi_render(d1l_ui_wifi_controller_t *controller,
         invalidate_render(controller);
         return false;
     }
+    if (memcmp(&controller->rendered, view_model, sizeof(*view_model)) == 0 &&
+        controller->action_handler == action_handler &&
+        controller->action_context == action_context) {
+        return true;
+    }
+    if (controller->keyboard &&
+        lv_obj_is_valid(controller->keyboard) &&
+        !lv_obj_has_flag(controller->keyboard, LV_OBJ_FLAG_HIDDEN)) {
+        return true;
+    }
     clear_sensitive_input(controller);
     advance_generation(controller);
     controller->rendered = *view_model;

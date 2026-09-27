@@ -93,8 +93,11 @@ static bool valid_radio_edit(const d1l_app_radio_profile_edit_t *profile)
     if (!profile) {
         return false;
     }
-    return profile->frequency_hz >= 902000000UL &&
-           profile->frequency_hz <= 928000000UL &&
+    const bool valid_freq = (profile->frequency_hz >= 863000000UL &&
+                             profile->frequency_hz <= 870000000UL) ||
+                            (profile->frequency_hz >= 902000000UL &&
+                             profile->frequency_hz <= 928000000UL);
+    return valid_freq &&
            profile->bandwidth_tenths_khz >= 78U &&
            profile->bandwidth_tenths_khz <= 5000U &&
            profile->spreading_factor >= 5U &&
@@ -422,6 +425,10 @@ void d1l_app_model_snapshot(d1l_app_snapshot_t *snapshot)
     snapshot->map_tile_sideload_supported = false;
     d1l_map_tile_provider_t map_provider = {0};
     d1l_map_tile_provider_snapshot(&map_provider);
+    if (!map_provider.configured && snapshot->map_tile_cache_ready) {
+        (void)d1l_map_tile_provider_refresh(&storage);
+        d1l_map_tile_provider_snapshot(&map_provider);
+    }
     snapshot->map_tile_provider_configured = map_provider.configured;
     snapshot->map_location_set = settings.map_location_set;
     snapshot->map_center_source = D1L_MAP_CENTER_SOURCE_UNKNOWN;
@@ -1300,7 +1307,7 @@ void d1l_app_model_default_radio_profile(d1l_app_radio_profile_edit_t *profile)
     if (!profile) {
         return;
     }
-    const d1l_radio_profile_t *defaults = d1l_radio_profile_uscan_default();
+    const d1l_radio_profile_t *defaults = d1l_radio_profile_default();
     profile->frequency_hz = defaults->frequency_hz;
     profile->bandwidth_tenths_khz = (uint16_t)((defaults->bandwidth_khz * 10.0f) + 0.5f);
     profile->spreading_factor = defaults->spreading_factor;

@@ -17,7 +17,7 @@ static void fill_failure(d1l_radiohw_status_t *status, const char *code)
 
 static esp_err_t read_radio_pins(uint16_t *pins)
 {
-#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_D1L
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_D1L || CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
     return tca9535_read_input_pins(pins);
 #else
     uint8_t pins8 = 0;

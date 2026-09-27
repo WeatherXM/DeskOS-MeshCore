@@ -1,0 +1,1815 @@
+diff --git a/components/bsp/Kconfig.projbuild b/components/bsp/Kconfig.projbuild
+index 19a53d4..7c19643 100644
+--- a/components/bsp/Kconfig.projbuild
++++ b/components/bsp/Kconfig.projbuild
+@@ -6,7 +6,7 @@ menu "Board Configuration"
+     config LCD_BOARD_EV
+         bool "ESP32-S3-LCD-EV-BOARD Development Board"
+     config LCD_BOARD_SENSECAP_INDICATOR_WXM
+-        bool "SenseCAP Indicator for WXM"
++        bool "WeatherXM WG1200 / D1 Gateway (WeatherXM AG)"
+     config LCD_BOARD_SENSECAP_INDICATOR_D1
+         bool "SenseCAP Indicator D1/D1S"
+     config LCD_BOARD_SENSECAP_INDICATOR_D1L
+diff --git a/components/bsp/include/bsp_board.h b/components/bsp/include/bsp_board.h
+index 0ea33bd..5f7945c 100644
+--- a/components/bsp/include/bsp_board.h
++++ b/components/bsp/include/bsp_board.h
+@@ -198,6 +198,7 @@ typedef struct {
+     esp_err_t (*set_level)(uint8_t pin, bool level);
+     esp_err_t (*read_output_pins)(uint8_t *pin_val);
+     esp_err_t (*read_input_pins)(uint8_t *pin_val);
++    esp_err_t (*read_input_pins16)(uint16_t *pin_val);
+     esp_err_t (*multi_write_start)(void);
+     esp_err_t (*multi_write_new_level)(int pin, bool new_level);
+     esp_err_t (*multi_write_end)(void);
+@@ -464,6 +465,9 @@ const board_res_desc_t *bsp_board_get_description(void);
+  */
+ esp_err_t bsp_board_power_ctrl(power_module_t module, bool on);
+ 
++void bsp_spi_lock(void);
++void bsp_spi_unlock(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/components/bsp/src/boards/sensecap_indicator_board.c b/components/bsp/src/boards/sensecap_indicator_board.c
+index e74bb54..652af38 100644
+--- a/components/bsp/src/boards/sensecap_indicator_board.c
++++ b/components/bsp/src/boards/sensecap_indicator_board.c
+@@ -30,8 +30,10 @@ static const char *TAG = "board sensecap";
+ #define EXPANDER_IO_LCD_RESET   5
+ 
+ #define EXPANDER_IO_RP2040_RESET   8
+-
++#define EXPANDER_IO_BUZZER         9
+ #define EXPANDER_IO_BMP_PWR       10
++#define EXPANDER_IO_SD_CS         11
++#define EXPANDER_IO_SD_DET        12
+ 
+ #define SENSOR_BMP_ADDR    (0X77)
+ 
+@@ -48,7 +50,8 @@ static const io_expander_ops_t g_board_lcd_evb_io_expander_ops = {
+     .set_direction = tca9535_set_direction,
+     .set_level = tca9535_set_level,
+     .read_output_pins = NULL,
+-    .read_input_pins = tca9535_read_input_pins,
++    .read_input_pins = NULL,
++    .read_input_pins16 = tca9535_read_input_pins,
+     .multi_write_start = tca9535_multi_write_start,
+     .multi_write_new_level = tca9535_multi_write_new_level,
+     .multi_write_end = tca9535_multi_write_end,
+@@ -176,12 +179,21 @@ static const board_res_desc_t g_board_lcd_evb_res = {
+     .GPIO_SDMMC_D3 =   (GPIO_NUM_NC),
+     .GPIO_SDMMC_DET =  (GPIO_NUM_NC),
+ 
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    .FUNC_SDSPI_EN =       (1),
++    .SDSPI_HOST =          (SPI3_HOST),
++    .GPIO_SDSPI_CS =       (GPIO_NUM_NC),
++    .GPIO_SDSPI_SCLK =     (GPIO_NUM_41),
++    .GPIO_SDSPI_MISO =     (GPIO_NUM_47),
++    .GPIO_SDSPI_MOSI =     (GPIO_NUM_48),
++#else
+     .FUNC_SDSPI_EN =       (0),
+     .SDSPI_HOST =          (SPI2_HOST),
+     .GPIO_SDSPI_CS =       (GPIO_NUM_NC),
+     .GPIO_SDSPI_SCLK =     (GPIO_NUM_NC),
+     .GPIO_SDSPI_MISO =     (GPIO_NUM_NC),
+     .GPIO_SDSPI_MOSI =     (GPIO_NUM_NC),
++#endif
+ 
+     .FUNC_SPI_EN =         (0),
+     .GPIO_SPI_CS =         (GPIO_NUM_NC),
+@@ -259,6 +271,13 @@ esp_err_t bsp_board_sensecap_indicator_init(void)
+ 
+     g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_BMP_PWR, 1);
+     g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_BMP_PWR, 1);
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_SD_CS, 1); // SD_CS Output
++    g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_SD_CS, 0);     // Active LOW (Selected)
++    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_SD_DET, 0); // SD_DET Input
++    g_board_lcd_evb_io_expander_ops.set_direction(EXPANDER_IO_BUZZER, 1); // Buzzer Output
++    g_board_lcd_evb_io_expander_ops.set_level(EXPANDER_IO_BUZZER, 0);    // Silent (LOW)
++#endif
+     
+     bsp_btn_init_default();
+ 
+diff --git a/components/bsp/src/calibration/touch_calibration.c b/components/bsp/src/calibration/touch_calibration.c
+index 89c32eb..7880fbf 100644
+--- a/components/bsp/src/calibration/touch_calibration.c
++++ b/components/bsp/src/calibration/touch_calibration.c
+@@ -50,9 +50,9 @@ static bool g_calibrated = false;
+ static int (*g_touch_is_pressed)(void) = NULL;
+ static esp_err_t (*g_touch_read_rawdata)(uint16_t *x, uint16_t *y) = NULL;
+ 
+-static void lcd_draw_bitmap(int x, int y, int w, int h, void *data)
++static esp_err_t lcd_draw_bitmap(int x, int y, int w, int h, const void *data)
+ {
+-    bsp_lcd_flush(x, y, x + w, y + h, data);
++    return bsp_lcd_flush(x, y, x + w, y + h, data);
+ }
+ 
+ static esp_err_t touch_save_calibration(const void *buf, size_t sz)
+diff --git a/components/bsp/src/codec/es8388.c b/components/bsp/src/codec/es8388.c
+index 59f28d0..e8ed194 100755
+--- a/components/bsp/src/codec/es8388.c
++++ b/components/bsp/src/codec/es8388.c
+@@ -470,7 +470,7 @@ esp_err_t es8388_get_voice_mute(void)
+  *     - (-1) Parameter error
+  *     - (0)   Success
+  */
+-esp_err_t es8388_config_dac_output(int output)
++esp_err_t es8388_config_dac_output(es_dac_output_t output)
+ {
+     esp_err_t res;
+     uint8_t reg = 0;
+diff --git a/components/bsp/src/indev/indev.c b/components/bsp/src/indev/indev.c
+index 2b8aa91..48c699f 100644
+--- a/components/bsp/src/indev/indev.c
++++ b/components/bsp/src/indev/indev.c
+@@ -43,8 +43,9 @@ esp_err_t indev_init_default(void)
+ 
+     if (brd->BSP_INDEV_IS_TP) {
+         ret = indev_init(BSP_INDEV_TP);
+-        if (ESP_OK == ret) {
++        if (ESP_OK == ret || ESP_ERR_INVALID_STATE == ret) {
+             g_major_dev = BSP_INDEV_TP;
++            ret = ESP_OK;
+         }
+     } else {
+         ret = indev_init(BSP_INDEV_BTN);
+@@ -68,8 +69,10 @@ void indev_reset(void)
+ 
+ esp_err_t indev_get_major_value(indev_data_t *data)
+ {
+-    uint16_t x, y;
+-    uint8_t tp_num, btn_val;
++    uint16_t x = 0;
++    uint16_t y = 0;
++    uint8_t tp_num = 0;
++    uint8_t btn_val = 0;
+     indev_hid_state_t hid_indev_data;
+ 
+     static uint32_t err_cnt = 0;
+@@ -78,15 +81,14 @@ esp_err_t indev_get_major_value(indev_data_t *data)
+     case BSP_INDEV_TP:
+         if (ESP_OK == indev_tp_read(&tp_num, &x, &y, &btn_val)) {
+             data->x = x;
++            bool pressed = (tp_num > 0) || (btn_val != 0);
+             data->y = y;
+-            data->btn_val = btn_val;
+-            if (tp_num > 0) {
+-                data->pressed = true;
+-            } else {
+-                data->pressed = false;
+-            }
++            data->btn_val = pressed ? 1 : 0;
++            data->pressed = pressed;
+             err_cnt=0;
+         } else {
++            data->btn_val = 0;
++            data->pressed = false;
+             // i2c read  error
+             err_cnt++;
+             if( err_cnt > 100) {
+diff --git a/components/bsp/src/indev/indev_tp.c b/components/bsp/src/indev/indev_tp.c
+index b57ece5..d3f6dd3 100644
+--- a/components/bsp/src/indev/indev_tp.c
++++ b/components/bsp/src/indev/indev_tp.c
+@@ -53,14 +53,14 @@ static esp_err_t tp_prob(int *tp_dev_id)
+     for (size_t i = 0; i < sizeof(tp_dev_list) / sizeof(tp_dev_list[0]); i++) {
+         if (tp_dev_list[i].dev_addr != 0xff) {
+             if (ESP_OK == bsp_i2c_probe_addr(tp_dev_list[i].dev_addr)) {
+-                *tp_dev_id = tp_dev_list[i].dev_vendor;
++                *tp_dev_id = (int)i;
+                 ESP_LOGI(TAG, "Detected touch panel at 0x%02X. Vendor : %s",
+                         tp_dev_list[i].dev_addr, tp_dev_list[i].dev_name);
+                 return ESP_OK;
+             }
+         }
+         else {
+-            *tp_dev_id = tp_dev_list[i].dev_vendor;
++            *tp_dev_id = (int)i;
+             ESP_LOGI(TAG, "Detected touch panel at 0x%02X. Vendor : %s",
+                     tp_dev_list[i].dev_addr, tp_dev_list[i].dev_name);
+             return ESP_OK;
+@@ -77,11 +77,18 @@ esp_err_t indev_tp_init(void)
+     esp_err_t ret_val = ESP_OK;
+ 
+ #if CONFIG_SENSECAP_INDICATOR_SCREEN_GX || CONFIG_SENSECAP_INDICATOR_SCREEN_DX
+-    tp_dev_id = TP_VENDOR_FT;
++    if (ESP_OK == bsp_i2c_probe_addr(tp_dev_list[0].dev_addr)) {
++        tp_dev_id = 0;
++        ESP_LOGI(TAG, "Detected touch panel at 0x%02X. Vendor : %s",
++                 tp_dev_list[0].dev_addr, tp_dev_list[0].dev_name);
++    }
+ #endif
+ 
+     if (tp_dev_id < 0) {
+-        ret_val |= tp_prob(&tp_dev_id);
++        ret_val = tp_prob(&tp_dev_id);
++        if (ret_val != ESP_OK) {
++            return ret_val;
++        }
+     }
+ 
+     switch (tp_dev_list[tp_dev_id].dev_vendor) {
+diff --git a/components/bsp/src/peripherals/bsp_lcd.c b/components/bsp/src/peripherals/bsp_lcd.c
+index d432aa6..030ec58 100644
+--- a/components/bsp/src/peripherals/bsp_lcd.c
++++ b/components/bsp/src/peripherals/bsp_lcd.c
+@@ -29,8 +29,8 @@ static esp_lcd_panel_io_handle_t io_handle = NULL;
+ static esp_lcd_panel_handle_t panel_handle = NULL;
+ 
+ #if CONFIG_LCD_AVOID_TEAR
+-static uint8_t *lcd_buf0 = NULL;
+-static uint8_t *lcd_buf1 = NULL;
++static void *lcd_buf0 = NULL;
++static void *lcd_buf1 = NULL;
+ static SemaphoreHandle_t trans_ready = NULL;
+ static SemaphoreHandle_t flush_ready = NULL;
+ static TaskHandle_t lcd_task_handle;
+@@ -39,7 +39,7 @@ static void lcd_task(void *args);
+ 
+ #if CONFIG_LCD_LVGL_DIRECT_MODE
+ static bool (*lvgl_flush_is_end)(void) = NULL;
+-static bool (*lvgl_direct_mode_buf_copy)(void) = NULL;
++static void (*lvgl_direct_mode_buf_copy)(void) = NULL;
+ #endif
+ 
+ static void *p_user_data = NULL;
+@@ -80,7 +80,7 @@ static esp_err_t screen_clear(uint16_t color)
+ 
+ IRAM_ATTR static bool on_vsync_event(
+     esp_lcd_panel_handle_t panel,
+-    esp_lcd_rgb_panel_event_data_t *edata,
++    const esp_lcd_rgb_panel_event_data_t *edata,
+     void *user_ctx
+ )
+ {
+diff --git a/components/bsp/src/storage/bsp_sdcard.c b/components/bsp/src/storage/bsp_sdcard.c
+index 40f3c5c..d2d2ef7 100644
+--- a/components/bsp/src/storage/bsp_sdcard.c
++++ b/components/bsp/src/storage/bsp_sdcard.c
+@@ -73,7 +73,7 @@ esp_err_t bsp_sdcard_init(char *mount_point, size_t max_files)
+             .max_transfer_sz = 4000,
+         };
+         ret_val = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+-        if (ret_val != ESP_OK) {
++        if (ret_val != ESP_OK && ret_val != ESP_ERR_INVALID_STATE) {
+             ESP_LOGE(TAG, "Failed to initialize bus.");
+             return ret_val;
+         }
+diff --git a/components/i2c_devices/touch_panel/ft5x06.c b/components/i2c_devices/touch_panel/ft5x06.c
+index ee52cb8..dde54ca 100644
+--- a/components/i2c_devices/touch_panel/ft5x06.c
++++ b/components/i2c_devices/touch_panel/ft5x06.c
+@@ -90,7 +90,7 @@ static inline esp_err_t ft5x06_write_byte(uint8_t reg_addr, uint8_t data)
+ esp_err_t ft5x06_init(void)
+ {
+     if (NULL != ft5x06_handle) {
+-        return ESP_ERR_INVALID_STATE;
++        return ESP_OK;
+     }
+ 
+     bsp_i2c_add_device(&ft5x06_handle, FT5x06_ADDR);
+@@ -101,39 +101,22 @@ esp_err_t ft5x06_init(void)
+ 
+     esp_err_t ret_val = ESP_OK;
+ 
+-    // Valid touching detect threshold
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THGROUP, 70);
++    ret_val |= ft5x06_write_byte(FT5x06_DEVICE_MODE, 0x00);
++    ret_val |= ft5x06_write_byte(FT5x06_ID_G_PMODE, 0x00);
+ 
+-    // valid touching peak detect threshold
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THPEAK, 60);
+-
+-    // Touch focus threshold
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THCAL, 16);
+-
+-    // threshold when there is surface water
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THWATER, 60);
+-
+-    // threshold of temperature compensation
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THTEMP, 10);
+-
+-    // Touch difference threshold
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_THDIFF, 20);
+-
+-    // Delay to enter 'Monitor' status (s)
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_TIME_ENTER_MONITOR, 2);
+-
+-    // Period of 'Active' status (ms)
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODACTIVE, 12);
+-
+-    // Timer to enter 'idle' when in 'Monitor' (ms)
+-    i2c_bus_write_byte(ft5x06_handle, FT5x06_ID_G_PERIODMONITOR, 40);
+-
+-    return ESP_OK;
++    return ret_val;
+ }
+ 
+ static esp_err_t ft5x06_get_touch_points_num(uint8_t *touch_points_num)
+ {
+-    return ft5x06_read_byte(FT5x06_TOUCH_POINTS, touch_points_num);
++    esp_err_t ret = ft5x06_read_byte(FT5x06_TOUCH_POINTS, touch_points_num);
++    if (ret == ESP_OK) {
++        *touch_points_num &= 0x0f;
++        if (*touch_points_num > 5) {
++            *touch_points_num = 0;
++        }
++    }
++    return ret;
+ }
+ 
+ esp_err_t ft5x06_read_pos(uint8_t *touch_points_num, uint16_t *x, uint16_t *y)
+diff --git a/components/i2c_devices/touch_panel/gt911.c b/components/i2c_devices/touch_panel/gt911.c
+index ccc177e..89ff557 100644
+--- a/components/i2c_devices/touch_panel/gt911.c
++++ b/components/i2c_devices/touch_panel/gt911.c
+@@ -391,7 +391,7 @@ int gt911_pos_read(uint16_t *xpos, uint16_t *ypos)
+ {
+     u8 key_value = 0;
+     struct goodix_point_t points[GTP_MAX_TOUCH_ID];
+-    u8 finger_state = gtp_get_points(&g_ts_data, &points, &key_value);
++    u8 finger_state = gtp_get_points(&g_ts_data, points, &key_value);
+ 
+     if (finger_state & 0x0f) {
+         *xpos = points[0].x;
+diff --git a/components/i2c_devices/touch_panel/tt21100.c b/components/i2c_devices/touch_panel/tt21100.c
+index 15dc56a..5323698 100644
+--- a/components/i2c_devices/touch_panel/tt21100.c
++++ b/components/i2c_devices/touch_panel/tt21100.c
+@@ -55,7 +55,7 @@ esp_err_t tt21100_tp_init(void)
+ 
+     uint16_t reg_val = 0;
+     do {
+-        tt21100_read(&reg_val, sizeof(reg_val));
++        tt21100_read((uint8_t *)&reg_val, sizeof(reg_val));
+         vTaskDelay(pdMS_TO_TICKS(20));
+     } while (0x0002 != reg_val);
+ 
+@@ -115,7 +115,7 @@ esp_err_t tt21100_tp_read(void)
+     esp_err_t ret_val = ESP_OK;
+ 
+     /* Get report data length */
+-    ret_val |= tt21100_read(&data_len, sizeof(data_len));
++    ret_val |= tt21100_read((uint8_t *)&data_len, sizeof(data_len));
+     ESP_LOGD(TAG, "Data len : %u", data_len);
+ 
+     /* Read report data if length */
+diff --git a/components/lora/bsp_sx126x.h b/components/lora/bsp_sx126x.h
+index aecc9ed..6dcab18 100644
+--- a/components/lora/bsp_sx126x.h
++++ b/components/lora/bsp_sx126x.h
+@@ -24,6 +24,12 @@ extern io_expander_ops_t *indicator_io_expander;
+ 
+ spi_device_handle_t bsp_sx126x_spi_handle_get(void);
+ 
++/* Latched BUSY timeout (1), expander read (2), or SPI transfer failure (3).
++ * Cleared only by
++ * SX126xReset under the driver's exclusive recovery claim. */
++uint32_t bsp_sx126x_fault_get(void);
++uint32_t bsp_sx126x_fault_count_get(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/components/lora/radio.c b/components/lora/radio.c
+index 17e3702..5160cd0 100644
+--- a/components/lora/radio.c
++++ b/components/lora/radio.c
+@@ -23,6 +23,7 @@
+ #include <math.h>
+ #include <string.h>
+ #include "radio.h"
++#include "bsp_sx126x.h"
+ #include "sx126x.h"
+ #include "sx126x-board.h"
+ #include "timer.h"
+@@ -33,6 +34,9 @@
+  * \param [IN] events Structure containing the driver callback functions
+  */
+ void RadioInit( RadioEvents_t *events );
++void RadioSendWithOrigin( uint8_t *buffer, uint8_t size, uint32_t origin );
++bool RadioRecoverTxWithOrigin( uint32_t origin );
++bool RadioRecoverHardware( void );
+ 
+ /*!
+  * Return current radio status
+@@ -372,7 +376,10 @@ const struct Radio_s Radio =
+     RadioIrqProcess,
+     // Available on SX126x only
+     RadioRxBoosted,
+-    RadioSetRxDutyCycle
++    RadioSetRxDutyCycle,
++    RadioSendWithOrigin,
++    RadioRecoverTxWithOrigin,
++    RadioRecoverHardware
+ };
+ 
+ /*
+@@ -418,7 +425,7 @@ const FskBandwidth_t FskBandwidths[] =
+     { 500000, 0x00 }, // Invalid Bandwidth
+ };
+ 
+-const RadioLoRaBandwidths_t Bandwidths[] = { LORA_BW_125, LORA_BW_250, LORA_BW_500 };
++const RadioLoRaBandwidths_t Bandwidths[] = { LORA_BW_125, LORA_BW_250, LORA_BW_500, LORA_BW_062 };
+ 
+ uint8_t MaxPayloadLength = 0xFF;
+ 
+@@ -432,6 +439,23 @@ PacketStatus_t RadioPktStatus;
+ uint8_t RadioRxPayload[255];
+ 
+ bool IrqFired = false;
++static volatile uint32_t RadioTxOrigin = 0;
++static uint32_t RadioIrqTxOrigin = 0;
++static uint32_t RadioTxTimeoutOrigin = 0;
++static volatile uint32_t RadioIrqRecoveryClaim = 0;
++
++static bool RadioTryClaimIrqRecovery( void )
++{
++    uint32_t expected = 0;
++    return __atomic_compare_exchange_n( &RadioIrqRecoveryClaim, &expected, 1,
++                                        false, __ATOMIC_ACQ_REL,
++                                        __ATOMIC_ACQUIRE );
++}
++
++static void RadioReleaseIrqRecovery( void )
++{
++    __atomic_store_n( &RadioIrqRecoveryClaim, 0, __ATOMIC_RELEASE );
++}
+ 
+ /*
+  * SX126x DIO IRQ callback functions prototype
+@@ -518,10 +542,8 @@ static void DelayMs(int ms)
+     vTaskDelay(ms / portTICK_PERIOD_MS); 
+ }
+ 
+-void RadioInit( RadioEvents_t *events )
+-{
+-    RadioEvents = events;
+-
++static void RadioInitHardware( void )
++{
+     SX126xInit( RadioOnDioIrq );
+     SX126xSetStandby( STDBY_XOSC );
+     SX126xSetRegulatorMode( USE_DCDC );
+@@ -534,11 +556,32 @@ void RadioInit( RadioEvents_t *events )
+     RadioAddRegisterToRetentionList( REG_RX_GAIN );
+     RadioAddRegisterToRetentionList( REG_TX_MODULATION );
+ 
+-    // Initialize driver timeout timers
++}
++
++void RadioInit( RadioEvents_t *events )
++{
++    RadioEvents = events;
++    RadioInitHardware();
+     TimerInit( &TxTimeoutTimer, RadioOnTxTimeoutIrq );
+     TimerInit( &RxTimeoutTimer, RadioOnRxTimeoutIrq );
+-
+     IrqFired = false;
++}
++
++bool RadioRecoverHardware( void )
++{
++    if( !RadioTryClaimIrqRecovery() ) return false;
++    TimerStop( &TxTimeoutTimer );
++    TimerStop( &RxTimeoutTimer );
++    RadioTxTimeoutOrigin = 0;
++    RadioIrqTxOrigin = 0;
++    IrqFired = false;
++    __atomic_store_n( &RadioTxOrigin, 0, __ATOMIC_RELEASE );
++    /* Reuse the existing timers and IRQ task. A failed peripheral must not
++     * leak timer handles or create another task on every recovery attempt. */
++    RadioInitHardware();
++    const bool recovered = bsp_sx126x_fault_get() == 0U;
++    RadioReleaseIrqRecovery();
++    return recovered;
+ }
+ 
+ RadioState_t RadioGetStatus( void )
+@@ -949,7 +992,8 @@ static uint32_t RadioGetLoRaTimeOnAirNumerator( uint32_t bandwidth,
+     }
+ 
+     if( ( ( bandwidth == 0 ) && ( ( datarate == 11 ) || ( datarate == 12 ) ) ) ||
+-        ( ( bandwidth == 1 ) && ( datarate == 12 ) ) )
++        ( ( bandwidth == 1 ) && ( datarate == 12 ) ) ||
++        ( ( bandwidth == 3 ) && ( datarate >= 10 ) ) )
+     {
+         lowDatareOptimize = true;
+     }
+@@ -1026,8 +1070,21 @@ uint32_t RadioTimeOnAir( RadioModems_t modem, uint32_t bandwidth,
+     return ( numerator + denominator - 1 ) / denominator;
+ }
+ 
++uint32_t RadioGetTxOrigin( void )
++{
++    return __atomic_load_n( &RadioTxOrigin, __ATOMIC_ACQUIRE );
++}
++
+ void RadioSend( uint8_t *buffer, uint8_t size )
+ {
++    RadioSendWithOrigin( buffer, size, 0 );
++}
++
++void RadioSendWithOrigin( uint8_t *buffer, uint8_t size, uint32_t origin )
++{
++    TimerStop( &TxTimeoutTimer );
++    RadioTxTimeoutOrigin = 0;
++    __atomic_store_n( &RadioTxOrigin, origin, __ATOMIC_RELEASE );
+     SX126xSetDioIrqParams( IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT,
+                            IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT,
+                            IRQ_RADIO_NONE,
+@@ -1043,9 +1100,37 @@ void RadioSend( uint8_t *buffer, uint8_t size )
+     }
+     SX126xSetPacketParams( &SX126x.PacketParams );
+ 
+-    SX126xSendPayload( buffer, size, 0 );
+-    TimerSetValue( &TxTimeoutTimer, TxTimeout );
+-    TimerStart( &TxTimeoutTimer );
++    const uint32_t hardwareTimeout = TxTimeout > 0x3FFFFU ?
++        0xFFFFFFU : ( TxTimeout << 6 );
++    SX126xSendPayload( buffer, size, hardwareTimeout );
++}
++
++bool RadioRecoverTxWithOrigin( uint32_t origin )
++{
++    if( ( origin == 0 ) || !RadioTryClaimIrqRecovery( ) )
++    {
++        return false;
++    }
++    if( __atomic_load_n( &RadioTxOrigin, __ATOMIC_ACQUIRE ) != origin )
++    {
++        RadioReleaseIrqRecovery( );
++        return false;
++    }
++
++    /* The watchdog owns this exact transmission. Quiesce the SX1262 and
++     * acknowledge both the radio IRQ and the TCA9535 input latch before the
++     * runtime can admit a successor. Queued stale board events then fail the
++     * origin match and cannot clear a successor's physical DIO1 interrupt. */
++    TimerStop( &TxTimeoutTimer );
++    RadioStandby( );
++    SX126xClearIrqStatus( IRQ_RADIO_ALL );
++    ( void )SX126xGetDio1PinState( );
++    RadioTxTimeoutOrigin = 0;
++    RadioIrqTxOrigin = 0;
++    IrqFired = false;
++    __atomic_store_n( &RadioTxOrigin, 0, __ATOMIC_RELEASE );
++    RadioReleaseIrqRecovery( );
++    return true;
+ }
+ 
+ void RadioSleep( void )
+@@ -1241,7 +1326,14 @@ uint32_t RadioGetWakeupTime( void )
+ 
+ void RadioOnTxTimeoutIrq( void* context )
+ {
+-    if( ( RadioEvents != NULL ) && ( RadioEvents->TxTimeout != NULL ) )
++    const uint32_t origin = RadioTxTimeoutOrigin;
++    RadioTxTimeoutOrigin = 0;
++    if( ( RadioEvents != NULL ) &&
++        ( RadioEvents->TxTimeoutWithOrigin != NULL ) )
++    {
++        RadioEvents->TxTimeoutWithOrigin( origin );
++    }
++    else if( ( RadioEvents != NULL ) && ( RadioEvents->TxTimeout != NULL ) )
+     {
+         RadioEvents->TxTimeout( );
+     }
+@@ -1257,9 +1349,33 @@ void RadioOnRxTimeoutIrq( void* context )
+ 
+ void RadioOnDioIrq( void* context )
+ {
++    const uint32_t origin = ( uint32_t )( uintptr_t )context;
++    if( !RadioTryClaimIrqRecovery( ) )
++    {
++        return;
++    }
++    const uint32_t activeOrigin =
++        __atomic_load_n( &RadioTxOrigin, __ATOMIC_ACQUIRE );
++    if( ( ( origin != 0 ) || ( activeOrigin != 0 ) ) &&
++        ( origin != activeOrigin ) )
++    {
++        RadioReleaseIrqRecovery( );
++        return;
++    }
++
++    /* Only the matching IRQ generation may acknowledge the expander latch.
++     * Otherwise a delayed A event can clear B's physical DIO1 interrupt. */
++    if( SX126xGetDio1PinState( ) == 0 )
++    {
++        RadioReleaseIrqRecovery( );
++        return;
++    }
++
++    RadioIrqTxOrigin = origin;
+     IrqFired = true;
+ 
+     RadioIrqProcess();
++    RadioReleaseIrqRecovery( );
+ }
+ 
+ void RadioIrqProcess( void )
+@@ -1273,7 +1389,9 @@ void RadioIrqProcess( void )
+     if( isIrqFired == true )
+     {
+         uint16_t irqRegs = SX126xGetIrqStatus( );
++        if( bsp_sx126x_fault_get() != 0U ) return;
+         SX126xClearIrqStatus( irqRegs );
++        if( bsp_sx126x_fault_get() != 0U ) return;
+ 
+         // Check if DIO1 pin is High. If it is the case revert IrqFired to true
+         //CRITICAL_SECTION_BEGIN( );
+@@ -1283,13 +1401,24 @@ void RadioIrqProcess( void )
+         }
+         //CRITICAL_SECTION_END( );
+ 
+-        if( ( irqRegs & IRQ_TX_DONE ) == IRQ_TX_DONE )
+-        {
++        const uint32_t txDoneOrigin = RadioIrqTxOrigin;
++        if( ( ( irqRegs & IRQ_TX_DONE ) == IRQ_TX_DONE ) &&
++            ( ( txDoneOrigin == 0 ) ||
++              ( txDoneOrigin == __atomic_load_n( &RadioTxOrigin,
++                                                 __ATOMIC_ACQUIRE ) ) ) )
++        {
++            __atomic_store_n( &RadioTxOrigin, 0, __ATOMIC_RELEASE );
+             TimerStop( &TxTimeoutTimer );
+             //!< Update operating mode state to a value lower than \ref MODE_STDBY_XOSC
+             SX126xSetOperatingMode( MODE_STDBY_RC );
+             RadioStandby(); //todo
+-            if( ( RadioEvents != NULL ) && ( RadioEvents->TxDone != NULL ) )
++            if( ( RadioEvents != NULL ) &&
++                ( RadioEvents->TxDoneWithOrigin != NULL ) )
++            {
++                RadioEvents->TxDoneWithOrigin( txDoneOrigin );
++            }
++            else if( ( RadioEvents != NULL ) &&
++                     ( RadioEvents->TxDone != NULL ) )
+             {
+                 RadioEvents->TxDone( );
+             }
+@@ -1328,6 +1457,7 @@ void RadioIrqProcess( void )
+                 }
+                 SX126xGetPayload( RadioRxPayload, &size , 255 );
+                 SX126xGetPacketStatus( &RadioPktStatus );
++                if( bsp_sx126x_fault_get() != 0U ) return;
+                 if( ( RadioEvents != NULL ) && ( RadioEvents->RxDone != NULL ) )
+                 {
+                     RadioEvents->RxDone( RadioRxPayload, size, RadioPktStatus.Params.LoRa.RssiPkt, RadioPktStatus.Params.LoRa.SnrPkt );
+@@ -1347,12 +1477,23 @@ void RadioIrqProcess( void )
+ 
+         if( ( irqRegs & IRQ_RX_TX_TIMEOUT ) == IRQ_RX_TX_TIMEOUT )
+         {
+-            if( SX126xGetOperatingMode( ) == MODE_TX )
+-            {
++            const uint32_t txTimeoutOrigin = RadioIrqTxOrigin;
++            if( ( SX126xGetOperatingMode( ) == MODE_TX ) &&
++                ( ( txTimeoutOrigin == 0 ) ||
++                  ( txTimeoutOrigin == __atomic_load_n( &RadioTxOrigin,
++                                                        __ATOMIC_ACQUIRE ) ) ) )
++            {
++                __atomic_store_n( &RadioTxOrigin, 0, __ATOMIC_RELEASE );
+                 TimerStop( &TxTimeoutTimer );
+                 //!< Update operating mode state to a value lower than \ref MODE_STDBY_XOSC
+                 SX126xSetOperatingMode( MODE_STDBY_RC );
+-                if( ( RadioEvents != NULL ) && ( RadioEvents->TxTimeout != NULL ) )
++                if( ( RadioEvents != NULL ) &&
++                    ( RadioEvents->TxTimeoutWithOrigin != NULL ) )
++                {
++                    RadioEvents->TxTimeoutWithOrigin( txTimeoutOrigin );
++                }
++                else if( ( RadioEvents != NULL ) &&
++                         ( RadioEvents->TxTimeout != NULL ) )
+                 {
+                     RadioEvents->TxTimeout( );
+                 }
+diff --git a/components/lora/radio.h b/components/lora/radio.h
+index 16a2484..b1379d1 100644
+--- a/components/lora/radio.h
++++ b/components/lora/radio.h
+@@ -111,6 +111,11 @@ typedef struct
+      * \brief  Gnss Done Done callback prototype.
+     */
+     void    ( *WifiDone )( void );
++
++    /* Optional origin-aware TX callbacks. SendWithOrigin binds a non-zero
++     * generation to the physical IRQ that terminates that transmission. */
++    void    ( *TxDoneWithOrigin )( uint32_t origin );
++    void    ( *TxTimeoutWithOrigin )( uint32_t origin );
+ }RadioEvents_t;
+ 
+ /*!
+@@ -405,7 +410,23 @@ struct Radio_s
+      * \param [in]  sleepTime     Structure describing sleep timeout value
+      */
+     void ( *SetRxDutyCycle ) ( uint32_t rxTime, uint32_t sleepTime );
++
++    /* Origin-aware send used by runtimes that reject delayed terminal
++     * callbacks from a previous transmission. */
++    void ( *SendWithOrigin )( uint8_t *buffer, uint8_t size,
++                              uint32_t origin );
++
++    /* Exact-origin watchdog recovery. Returns false while another IRQ owner
++     * is completing the terminal path or when origin is no longer current. */
++    bool ( *RecoverTxWithOrigin )( uint32_t origin );
++
++    /* Peripheral reset with the IRQ path excluded; existing timers and
++     * callbacks are retained. The caller must reapply its radio profile. */
++    bool ( *RecoverHardware )( void );
+ };
++
++/* ISR-safe 32-bit snapshot copied into the board DIO queue. */
++uint32_t RadioGetTxOrigin( void );
+ 
+ /*!
+  * \brief Radio driver
+diff --git a/components/lora/sx126x_sensecap_board.c b/components/lora/sx126x_sensecap_board.c
+index d3418ac..915fa91 100644
+--- a/components/lora/sx126x_sensecap_board.c
++++ b/components/lora/sx126x_sensecap_board.c
+@@ -1,481 +1,599 @@
+-#include <stdlib.h>
+-#include "bsp_sx126x.h"
+-#include "radio.h"
+-#include "sx126x-board.h"
+-#include "driver/i2c.h"
+-#include <string.h>
+-
+-#include "bsp_i2c.h"
+-#include "timer.h"
+-//#define SX126X_SPI_DBUG 
+-
+-#define HOST_ID                 SPI3_HOST
+-
+-#define GPIO_QUEUE_STACK  (10240)
+-
+-static const int SPI_Frequency = 2000000;
+-static spi_device_handle_t SpiHandle;
+-static SemaphoreHandle_t   radio_mutex;
+-
+-
+-io_expander_ops_t *indicator_io_expander = NULL;
+-static QueueHandle_t gpio_evt_queue = NULL;
+-static DioIrqHandler * g_dioIrq;
+-
+-static const char *TAG = "sx126x";
+-
+-static RadioOperatingModes_t OperatingMode;
+-static bool init_flag = false;
+-
+-TimerTime_t g_lora_irq_time = 0;
+-bool  g_have_tcxo = false;
+-
+-static void IRAM_ATTR gpio_isr_handler(void* arg)
+-{
+-    TimerTime_t irq_time = TimerGetCurrentTime();
+-    xQueueSendFromISR(gpio_evt_queue, &irq_time, NULL);
+-}
+-
+-uint32_t SX126xGetDio1PinState( void );
+-
+-static void expander_io_int(void* arg)
+-{
+-    TimerTime_t irq_time;
+-    RadioOperatingModes_t  mode;
+-    for(;;) {
+-        if(xQueueReceive(gpio_evt_queue, &irq_time, portMAX_DELAY)) {
+-            g_lora_irq_time = irq_time;
+-            // printf("lora irq:%d\n", g_lora_irq_time);
+-
+-            if( SX126xGetDio1PinState()) { // Only handle DIO1 interrupt
+-                xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-                mode = SX126xGetOperatingMode();
+-                xSemaphoreGive(radio_mutex);
+-                if( mode !=  MODE_SLEEP ) { // Filter out sleep mode interrupts
+-                    (g_dioIrq) (0); //handle irq
+-                }
+-            }
+-        }
+-    }
+-}
+-
+-static bool spi_write_byte(uint8_t* data_in, size_t DataLength )
+-{
+-#ifdef SX126X_SPI_DBUG
+-    printf("spi write: ");
+-    for(int i =0; i < DataLength ; i++) {
+-        printf("%x ",data_in[i]);
+-    }
+-    printf("\r\n");
+-#endif
+-
+-	spi_transaction_t SPITransaction;
+-
+-	if ( DataLength > 0 ) {
+-		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
+-		SPITransaction.length = DataLength * 8;
+-		SPITransaction.tx_buffer = data_in;
+-		SPITransaction.rx_buffer = NULL;
+-		spi_device_transmit( SpiHandle, &SPITransaction );
+-	}
+-
+-	return true;
+-}
+-
+-static bool spi_read_byte(uint8_t* data_out, size_t DataLength )
+-{
+-	spi_transaction_t SPITransaction;
+-
+-	if ( DataLength > 0 ) {
+-		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
+-		SPITransaction.length = DataLength * 8;
+-		SPITransaction.tx_buffer = NULL;
+-		SPITransaction.rx_buffer = data_out;
+-		spi_device_transmit( SpiHandle, &SPITransaction );
+-	}
+-
+-#ifdef SX126X_SPI_DBUG
+-    printf("spi read: ");
+-    for(int i =0; i < DataLength ; i++) {
+-        printf("%x ",data_out[i]);
+-    }
+-    printf("\r\n");
+-#endif
+-	return true;
+-}
+-
+-static uint8_t spi_transfer(uint8_t* data_in, uint8_t* data_out, size_t DataLength)
+-{
+-	spi_transaction_t SPITransaction;
+-
+-	if ( DataLength > 0 ) {
+-		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
+-		SPITransaction.length = DataLength * 8;
+-		SPITransaction.tx_buffer = data_in;
+-		SPITransaction.rx_buffer = data_out;
+-		spi_device_transmit( SpiHandle, &SPITransaction );
+-	}
+-
+-#ifdef SX126X_SPI_DBUG
+-    printf("spi write: ");
+-    for(int i =0; i < DataLength ; i++) {
+-        printf("%x ",data_in[i]);
+-    }
+-    printf(",read: ");
+-    for(int i =0; i < DataLength ; i++) {
+-        printf("%x ",data_out[i]);
+-    }
+-    printf("\r\n");
+-#endif
+-	return true;
+-}
+-
+-void SX126xIoInit( void )
+-{
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_NSS, 1); //output
+-    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_RST, 1); //output
+-    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_BUSY, 0); //input
+-    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_DIO_1, 0); //input
+-    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_VER, 0); //input
+-
+-    uint16_t pin_val;
+-    uint8_t cnt = 5;
+-    uint8_t hight_cnt = 0;
+-    for (size_t i = 0; i < cnt; i++)
+-    {
+-        pin_val = 0;
+-        esp_err_t ret = indicator_io_expander->read_input_pins(&pin_val);
+-        if( (pin_val & (0x01 << EXPANDER_IO_RADIO_VER)) ) {
+-            hight_cnt++;
+-        }
+-        vTaskDelay(5 / portTICK_PERIOD_MS);
+-    }
+-    if( hight_cnt >= 3) {
+-        g_have_tcxo = true;
+-    } else {
+-        g_have_tcxo = false;
+-    }
+-    printf("TCXO:%d,VOLTAGE:%d\r\n", g_have_tcxo, SX126X_TCXO_CTRL_VOLTAGE);
+-}
+-
+-
+-
+-void bsp_sx126x_init(void)
+-{
+-    if(init_flag){
+-        return;
+-    }
+-    init_flag = true;
+-
+-    ESP_LOGI(TAG, "bsp sx126x init");
+-    
+-    board_res_desc_t *brd = bsp_board_get_description();
+-
+-    indicator_io_expander = brd->io_expander_ops;
+-
+-    radio_mutex =xSemaphoreCreateMutex();
+-
+-
+-    esp_err_t ret;
+-    spi_bus_config_t buscfg={
+-        .miso_io_num = brd->GPIO_SPI_MISO,
+-        .mosi_io_num = brd->GPIO_SPI_MOSI,
+-        .sclk_io_num = brd->GPIO_SPI_SCLK,
+-        .quadwp_io_num = -1,
+-        .quadhd_io_num = -1
+-    };
+-
+-    //Initialize the SPI bus
+-    ret = spi_bus_initialize(HOST_ID, &buscfg, SPI_DMA_CH_AUTO);
+-	ESP_LOGI(TAG, "spi_bus_initialize=%d",ret);
+-	assert(ret==ESP_OK);
+-
+-	spi_device_interface_config_t devcfg;
+-	memset( &devcfg, 0, sizeof( spi_device_interface_config_t ) );
+-	devcfg.clock_speed_hz = SPI_Frequency;
+-	// It does not work with hardware CS control.
+-	//devcfg.spics_io_num = SX126x_SPI_SELECT;
+-	// It does work with software CS control.
+-	devcfg.spics_io_num = -1;
+-	devcfg.queue_size = 7;
+-	devcfg.mode = 0;
+-	devcfg.flags = SPI_DEVICE_NO_DUMMY;
+-
+-	//spi_device_handle_t handle;
+-	ret = spi_bus_add_device( HOST_ID, &devcfg, &SpiHandle);
+-	ESP_LOGI(TAG, "spi_bus_add_device=%d",ret);
+-	assert(ret==ESP_OK);
+-
+-    SX126xIoInit();
+-}
+-
+-spi_device_handle_t bsp_sx126x_spi_handle_get(void)
+-{
+-    return SpiHandle;
+-}
+-
+-void SX126xIoIrqInit( DioIrqHandler dioIrq )
+-{
+-    g_dioIrq = (uint32_t *)dioIrq;
+-
+-    static bool Ioirq_init_flag = false;
+-    if( Ioirq_init_flag ){
+-        return;
+-    }
+-    Ioirq_init_flag = true;
+-
+-    gpio_config_t io_conf = {};
+-    io_conf.intr_type = GPIO_INTR_NEGEDGE; //falling edge
+-    io_conf.pin_bit_mask = (1ULL << ESP32_EXPANDER_IO_INT);
+-    io_conf.mode = GPIO_MODE_INPUT;
+-    io_conf.pull_up_en = 1;
+-    gpio_config(&io_conf);
+-    gpio_evt_queue = xQueueCreate(10, sizeof(TimerTime_t));
+-    xTaskCreate(expander_io_int, "expander_io_int", GPIO_QUEUE_STACK, NULL, 10, NULL);
+-
+-    gpio_install_isr_service(0);
+-    gpio_isr_handler_add(ESP32_EXPANDER_IO_INT, gpio_isr_handler, (void*)ESP32_EXPANDER_IO_INT);
+-}
+-
+-void SX126xIoDeInit( void )
+-{
+-}
+-
+-void SX126xIoDbgInit( void )
+-{
+-}
+-
+-void SX126xIoTcxoInit( void )
+-{
+-    if( g_have_tcxo ) {
+-        SX126xSetDio3AsTcxoCtrl(SX126X_TCXO_CTRL_VOLTAGE,  SX126xGetBoardTcxoWakeupTime()<<6);
+-    }
+-
+-    CalibrationParams_t calibParam;
+-    calibParam.Value = 0x7F;
+-    SX126xCalibrate( calibParam );
+-}
+-
+-uint32_t SX126xGetBoardTcxoWakeupTime( void )
+-{
+-#define BOARD_TCXO_WAKEUP_TIME                      5
+-    return BOARD_TCXO_WAKEUP_TIME;
+-}
+-
+-void SX126xIoRfSwitchInit( void )
+-{
+-    SX126xSetDio2AsRfSwitchCtrl( true );
+-}
+-
+-RadioOperatingModes_t SX126xGetOperatingMode( void )
+-{
+-    return OperatingMode;
+-}
+-
+-void SX126xSetOperatingMode( RadioOperatingModes_t mode )
+-{
+-    OperatingMode = mode;
+-}
+-
+-void SX126xReset( void )
+-{
+-    vTaskDelay(10 / portTICK_PERIOD_MS);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_RST, 0);
+-    vTaskDelay(30 / portTICK_PERIOD_MS);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_RST, 1);
+-    vTaskDelay(20 / portTICK_PERIOD_MS);
+-}
+-
+-void SX126xWaitOnBusy( void )
+-{
+-    uint16_t pin_val;
+-    while(1) {
+-        esp_err_t ret = indicator_io_expander->read_input_pins(&pin_val);
+-        if( ret == ESP_OK ) {
+-            if( !(pin_val & (0x01 << EXPANDER_IO_RADIO_BUSY)) ) {
+-                return;
+-            }
+-        }
+-        vTaskDelay(2 / portTICK_PERIOD_MS);
+-    }
+-}
+-
+-void SX126xWakeup( void )
+-{
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    uint8_t tx_buf[2];
+-    tx_buf[0] = RADIO_GET_STATUS;
+-    tx_buf[1] = 0x00;
+-    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    SX126xWaitOnBusy( );
+-    SX126xSetOperatingMode( MODE_STDBY_RC );
+-
+-}
+-
+-void SX126xWriteCommand( RadioCommands_t command, uint8_t *buffer, uint16_t size )
+-{
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    if(  command == RADIO_SET_SLEEP) {
+-        // Update mode in advance to prevent interrupts from being triggered when the device is sleeping
+-        SX126xSetOperatingMode( MODE_SLEEP ); 
+-    }
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    spi_write_byte(( uint8_t *)&command, 1);
+-    spi_write_byte( buffer, size);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    if( command != RADIO_SET_SLEEP )
+-    {
+-        SX126xWaitOnBusy( );
+-    }
+-}
+-
+-uint8_t SX126xReadCommand( RadioCommands_t command, uint8_t *buffer, uint16_t size )
+-{
+-    uint8_t status = 0;
+-
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    spi_write_byte(( uint8_t *)&command, 1);
+-    uint8_t data = 0x00;
+-    spi_transfer(&data, &status, 1);
+-    spi_read_byte(buffer, size);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    SX126xWaitOnBusy( );
+-
+-    return status;
+-}
+-
+-void SX126xWriteRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
+-{
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    uint8_t tx_buf[3];
+-    tx_buf[0] = RADIO_WRITE_REGISTER;
+-    tx_buf[1] = ( address & 0xFF00 ) >> 8;
+-    tx_buf[2] = address & 0x00FF;
+-    spi_write_byte(( uint8_t *)tx_buf, 3);
+-    spi_write_byte( buffer, size);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    SX126xWaitOnBusy( );
+-}
+-
+-void SX126xWriteRegister( uint16_t address, uint8_t value )
+-{
+-    SX126xWriteRegisters( address, &value, 1 );
+-}
+-
+-void SX126xReadRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
+-{
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    uint8_t tx_buf[4];
+-    tx_buf[0] = RADIO_READ_REGISTER;
+-    tx_buf[1] = ( address & 0xFF00 ) >> 8;
+-    tx_buf[2] = address & 0x00FF;
+-    tx_buf[3] = 0;
+-    spi_write_byte(( uint8_t *)tx_buf, 4);
+-    spi_read_byte(buffer, size);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    SX126xWaitOnBusy( );
+-}
+-
+-uint8_t SX126xReadRegister( uint16_t address )
+-{
+-    uint8_t data;
+-    SX126xReadRegisters( address, &data, 1 );
+-    return data;
+-}
+-
+-void SX126xWriteBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
+-{
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    uint8_t tx_buf[2];
+-    tx_buf[0] = RADIO_WRITE_BUFFER;
+-    tx_buf[1] = offset;
+-    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
+-    spi_write_byte( buffer, size);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-
+-    SX126xWaitOnBusy( );
+-}
+-
+-void SX126xReadBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
+-{
+-    SX126xCheckDeviceReady( );
+-
+-    xSemaphoreTake(radio_mutex, portMAX_DELAY);
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0);
+-    uint8_t tx_buf[3];
+-    tx_buf[0] = RADIO_READ_BUFFER;
+-    tx_buf[1] = offset;
+-    tx_buf[2] = 0;
+-    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
+-    spi_read_byte(buffer, size);
+-
+-    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
+-    xSemaphoreGive(radio_mutex);
+-    
+-    SX126xWaitOnBusy( );
+-}
+-
+-void SX126xSetRfTxPower( int8_t power )
+-{
+-    SX126xSetTxParams( power, RADIO_RAMP_40_US );
+-}
+-
+-uint8_t SX126xGetDeviceId( void )
+-{
+-    return SX1262;
+-}
+-
+-void SX126xAntSwOn( void )
+-{
+-}
+-
+-void SX126xAntSwOff( void )
+-{
+-}
+-
+-bool SX126xCheckRfFrequency( uint32_t frequency )
+-{
+-    // Implement check. Currently all frequencies are supported
+-    return true;
+-}
+-
+-uint32_t SX126xGetDio1PinState( void )
+-{
+-    uint16_t pin_val;
+-    esp_err_t ret = indicator_io_expander->read_input_pins(&pin_val);
+-    if( ret == ESP_OK ) {
+-        if( (pin_val & (0x01 << EXPANDER_IO_RADIO_DIO_1)) ) {
+-            return 1;
+-        }
+-    }
+-    return 0;
+-}
+-
++#include <stdlib.h>
++#include "bsp_sx126x.h"
++#include "radio.h"
++#include "sx126x-board.h"
++#include "driver/i2c.h"
++#include <string.h>
++
++#include "bsp_i2c.h"
++#include "timer.h"
++#include "esp_timer.h"
++//#define SX126X_SPI_DBUG 
++
++#define HOST_ID                 SPI3_HOST
++
++#define GPIO_QUEUE_STACK  (10240)
++#ifndef EXPANDER_IO_SD_CS
++#define EXPANDER_IO_SD_CS 11
++#endif
++
++static const int SPI_Frequency = 2000000;
++static spi_device_handle_t SpiHandle;
++static SemaphoreHandle_t   radio_mutex;
++static volatile uint32_t radio_bus_fault;
++static volatile uint32_t radio_bus_fault_count;
++
++uint32_t bsp_sx126x_fault_get(void)
++{
++    return __atomic_load_n(&radio_bus_fault, __ATOMIC_ACQUIRE);
++}
++
++uint32_t bsp_sx126x_fault_count_get(void)
++{
++    return __atomic_load_n(&radio_bus_fault_count, __ATOMIC_RELAXED);
++}
++
++static void latch_radio_bus_fault(uint32_t fault)
++{
++    uint32_t expected = 0U;
++    if (__atomic_compare_exchange_n(&radio_bus_fault, &expected, fault, false,
++                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++        uint32_t count = __atomic_load_n(&radio_bus_fault_count, __ATOMIC_RELAXED);
++        while (count != UINT32_MAX &&
++               !__atomic_compare_exchange_n(&radio_bus_fault_count, &count,
++                                             count + 1U, false,
++                                             __ATOMIC_RELAXED,
++                                             __ATOMIC_RELAXED)) {
++        }
++    }
++}
++
++
++io_expander_ops_t *indicator_io_expander = NULL;
++static QueueHandle_t gpio_evt_queue = NULL;
++static DioIrqHandler * g_dioIrq;
++
++static const char *TAG = "sx126x";
++
++static RadioOperatingModes_t OperatingMode;
++static bool init_flag = false;
++
++TimerTime_t g_lora_irq_time = 0;
++bool  g_have_tcxo = false;
++
++typedef struct {
++    TimerTime_t irq_time;
++    uint32_t tx_origin;
++} radio_irq_event_t;
++
++static void IRAM_ATTR gpio_isr_handler(void* arg)
++{
++    const radio_irq_event_t event = {
++        .irq_time = TimerGetCurrentTime(),
++        .tx_origin = RadioGetTxOrigin(),
++    };
++    xQueueSendFromISR(gpio_evt_queue, &event, NULL);
++}
++
++uint32_t SX126xGetDio1PinState( void );
++
++static void expander_io_int(void* arg)
++{
++    radio_irq_event_t event;
++    RadioOperatingModes_t  mode;
++    for(;;) {
++        if(xQueueReceive(gpio_evt_queue, &event, portMAX_DELAY)) {
++            g_lora_irq_time = event.irq_time;
++            // printf("lora irq:%d\n", g_lora_irq_time);
++
++            xSemaphoreTake(radio_mutex, portMAX_DELAY);
++            mode = SX126xGetOperatingMode();
++            xSemaphoreGive(radio_mutex);
++            if( mode !=  MODE_SLEEP ) { // Filter out sleep mode interrupts
++                (g_dioIrq) ((void *)(uintptr_t)event.tx_origin); //handle irq
++            }
++        }
++    }
++}
++
++static bool spi_write_byte(uint8_t* data_in, size_t DataLength )
++{
++    if (bsp_sx126x_fault_get() != 0U) return false;
++#ifdef SX126X_SPI_DBUG
++    printf("spi write: ");
++    for(int i =0; i < DataLength ; i++) {
++        printf("%x ",data_in[i]);
++    }
++    printf("\r\n");
++#endif
++
++	spi_transaction_t SPITransaction;
++
++	if ( DataLength > 0 ) {
++		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
++		SPITransaction.length = DataLength * 8;
++		SPITransaction.tx_buffer = data_in;
++		SPITransaction.rx_buffer = NULL;
++        if (spi_device_transmit(SpiHandle, &SPITransaction) != ESP_OK) {
++            latch_radio_bus_fault(3U);
++            return false;
++        }
++	}
++
++	return true;
++}
++
++static bool spi_read_byte(uint8_t* data_out, size_t DataLength )
++{
++    if (bsp_sx126x_fault_get() != 0U) {
++        if (data_out && DataLength) memset(data_out, 0, DataLength);
++        return false;
++    }
++	spi_transaction_t SPITransaction;
++
++	if ( DataLength > 0 ) {
++		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
++		SPITransaction.length = DataLength * 8;
++		SPITransaction.tx_buffer = NULL;
++		SPITransaction.rx_buffer = data_out;
++        if (spi_device_transmit(SpiHandle, &SPITransaction) != ESP_OK) {
++            latch_radio_bus_fault(3U);
++            if (data_out) memset(data_out, 0, DataLength);
++            return false;
++        }
++	}
++
++#ifdef SX126X_SPI_DBUG
++    printf("spi read: ");
++    for(int i =0; i < DataLength ; i++) {
++        printf("%x ",data_out[i]);
++    }
++    printf("\r\n");
++#endif
++	return true;
++}
++
++static uint8_t spi_transfer(uint8_t* data_in, uint8_t* data_out, size_t DataLength)
++{
++    if (bsp_sx126x_fault_get() != 0U) {
++        if (data_out && DataLength) memset(data_out, 0, DataLength);
++        return 0U;
++    }
++	spi_transaction_t SPITransaction;
++
++	if ( DataLength > 0 ) {
++		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
++		SPITransaction.length = DataLength * 8;
++		SPITransaction.tx_buffer = data_in;
++		SPITransaction.rx_buffer = data_out;
++        if (spi_device_transmit(SpiHandle, &SPITransaction) != ESP_OK) {
++            latch_radio_bus_fault(3U);
++            if (data_out) memset(data_out, 0, DataLength);
++            return 0U;
++        }
++	}
++
++#ifdef SX126X_SPI_DBUG
++    printf("spi write: ");
++    for(int i =0; i < DataLength ; i++) {
++        printf("%x ",data_in[i]);
++    }
++    printf(",read: ");
++    for(int i =0; i < DataLength ; i++) {
++        printf("%x ",data_out[i]);
++    }
++    printf("\r\n");
++#endif
++	return true;
++}
++
++void SX126xIoInit( void )
++{
++    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1);
++    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_NSS, 1); //output
++    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_RST, 1); //output
++    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_BUSY, 0); //input
++    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_DIO_1, 0); //input
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    g_have_tcxo = false;
++    indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 0);
++    indicator_io_expander->set_direction(EXPANDER_IO_SD_CS, 1);
++#else
++    indicator_io_expander->set_direction(EXPANDER_IO_RADIO_VER, 0); //input
++
++    uint16_t pin_val;
++    uint8_t cnt = 5;
++    uint8_t hight_cnt = 0;
++    for (size_t i = 0; i < cnt; i++)
++    {
++        pin_val = 0;
++        esp_err_t ret = indicator_io_expander->read_input_pins16(&pin_val);
++        if( (pin_val & (0x01 << EXPANDER_IO_RADIO_VER)) ) {
++            hight_cnt++;
++        }
++        vTaskDelay(5 / portTICK_PERIOD_MS);
++    }
++    if( hight_cnt >= 3) {
++        g_have_tcxo = true;
++    } else {
++        g_have_tcxo = false;
++    }
++#endif
++    printf("TCXO:%d,VOLTAGE:%d\r\n", g_have_tcxo, SX126X_TCXO_CTRL_VOLTAGE);
++}
++
++
++
++void bsp_sx126x_init(void)
++{
++    if(init_flag){
++        return;
++    }
++    init_flag = true;
++
++    ESP_LOGI(TAG, "bsp sx126x init");
++    
++    board_res_desc_t *brd = bsp_board_get_description();
++
++    indicator_io_expander = brd->io_expander_ops;
++
++    radio_mutex =xSemaphoreCreateMutex();
++
++
++    esp_err_t ret;
++    spi_bus_config_t buscfg={
++        .miso_io_num = brd->GPIO_SPI_MISO,
++        .mosi_io_num = brd->GPIO_SPI_MOSI,
++        .sclk_io_num = brd->GPIO_SPI_SCLK,
++        .quadwp_io_num = -1,
++        .quadhd_io_num = -1
++    };
++
++    //Initialize the SPI bus
++    ret = spi_bus_initialize(HOST_ID, &buscfg, SPI_DMA_CH_AUTO);
++	ESP_LOGI(TAG, "spi_bus_initialize=%d",ret);
++	assert(ret==ESP_OK);
++
++	spi_device_interface_config_t devcfg;
++	memset( &devcfg, 0, sizeof( spi_device_interface_config_t ) );
++	devcfg.clock_speed_hz = SPI_Frequency;
++	// It does not work with hardware CS control.
++	//devcfg.spics_io_num = SX126x_SPI_SELECT;
++	// It does work with software CS control.
++	devcfg.spics_io_num = -1;
++	devcfg.queue_size = 7;
++	devcfg.mode = 0;
++	devcfg.flags = SPI_DEVICE_NO_DUMMY;
++
++	//spi_device_handle_t handle;
++	ret = spi_bus_add_device( HOST_ID, &devcfg, &SpiHandle);
++	ESP_LOGI(TAG, "spi_bus_add_device=%d",ret);
++	assert(ret==ESP_OK);
++
++    SX126xIoInit();
++}
++
++spi_device_handle_t bsp_sx126x_spi_handle_get(void)
++{
++    return SpiHandle;
++}
++
++void SX126xIoIrqInit( DioIrqHandler dioIrq )
++{
++    g_dioIrq = dioIrq;
++
++    static bool Ioirq_init_flag = false;
++    if( Ioirq_init_flag ){
++        return;
++    }
++    Ioirq_init_flag = true;
++
++    gpio_config_t io_conf = {};
++    io_conf.intr_type = GPIO_INTR_NEGEDGE; //falling edge
++    io_conf.pin_bit_mask = (1ULL << ESP32_EXPANDER_IO_INT);
++    io_conf.mode = GPIO_MODE_INPUT;
++    io_conf.pull_up_en = 1;
++    gpio_config(&io_conf);
++    gpio_evt_queue = xQueueCreate(10, sizeof(radio_irq_event_t));
++    xTaskCreate(expander_io_int, "expander_io_int", GPIO_QUEUE_STACK, NULL, 10, NULL);
++
++    gpio_install_isr_service(0);
++    gpio_isr_handler_add(ESP32_EXPANDER_IO_INT, gpio_isr_handler, (void*)ESP32_EXPANDER_IO_INT);
++}
++
++void SX126xIoDeInit( void )
++{
++}
++
++void SX126xIoDbgInit( void )
++{
++}
++
++void SX126xIoTcxoInit( void )
++{
++#if !CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    if( g_have_tcxo ) {
++        SX126xSetDio3AsTcxoCtrl(SX126X_TCXO_CTRL_VOLTAGE,  SX126xGetBoardTcxoWakeupTime()<<6);
++    }
++#endif
++
++    CalibrationParams_t calibParam;
++    calibParam.Value = 0x7F;
++    SX126xCalibrate( calibParam );
++}
++
++uint32_t SX126xGetBoardTcxoWakeupTime( void )
++{
++#define BOARD_TCXO_WAKEUP_TIME                      5
++    return BOARD_TCXO_WAKEUP_TIME;
++}
++
++void SX126xIoRfSwitchInit( void )
++{
++    SX126xSetDio2AsRfSwitchCtrl( true );
++}
++
++RadioOperatingModes_t SX126xGetOperatingMode( void )
++{
++    return OperatingMode;
++}
++
++void SX126xSetOperatingMode( RadioOperatingModes_t mode )
++{
++    OperatingMode = mode;
++}
++
++void SX126xReset( void )
++{
++    /* Exclude SPI while resetting. Recovery already owns the IRQ claim. */
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    vTaskDelay(10 / portTICK_PERIOD_MS);
++    indicator_io_expander->set_level(EXPANDER_IO_RADIO_RST, 0);
++    vTaskDelay(30 / portTICK_PERIOD_MS);
++    indicator_io_expander->set_level(EXPANDER_IO_RADIO_RST, 1);
++    vTaskDelay(20 / portTICK_PERIOD_MS);
++    __atomic_store_n(&radio_bus_fault, 0U, __ATOMIC_RELEASE);
++    xSemaphoreGive(radio_mutex);
++}
++
++void SX126xWaitOnBusy( void )
++{
++    const int64_t started_us = esp_timer_get_time();
++    while (bsp_sx126x_fault_get() == 0U) {
++        uint16_t pin_val = 0U;
++        const esp_err_t ret = indicator_io_expander->read_input_pins16(&pin_val);
++        if (ret == ESP_OK && !(pin_val & (1U << EXPANDER_IO_RADIO_BUSY))) {
++            return;
++        }
++        if (esp_timer_get_time() - started_us >= INT64_C(1000000)) {
++            latch_radio_bus_fault(ret == ESP_OK ? 1U : 2U);
++            return;
++        }
++        /* vTaskDelay(2 / portTICK_PERIOD_MS) can be zero ticks and starve
++         * lower-priority work. Always block for at least one tick. */
++        vTaskDelay(1);
++    }
++}
++
++static inline void sx1262_nss_set(bool level)
++{
++#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
++    if (level == 0) {
++        indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 1);     // Deselect SD
++        indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 0); // Select LoRa
++    } else {
++        indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, 1); // Deselect LoRa
++        indicator_io_expander->set_level(EXPANDER_IO_SD_CS, 0);     // Select SD
++    }
++#else
++    indicator_io_expander->set_level(EXPANDER_IO_RADIO_NSS, level ? 1 : 0);
++#endif
++}
++
++void bsp_spi_lock(void)
++{
++    if (radio_mutex != NULL) {
++        xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    }
++}
++
++void bsp_spi_unlock(void)
++{
++    if (radio_mutex != NULL) {
++        xSemaphoreGive(radio_mutex);
++    }
++}
++
++void SX126xWakeup( void )
++{
++    if (bsp_sx126x_fault_get() != 0U) return;
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    uint8_t tx_buf[2];
++    tx_buf[0] = RADIO_GET_STATUS;
++    tx_buf[1] = 0x00;
++    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    SX126xWaitOnBusy( );
++    SX126xSetOperatingMode( MODE_STDBY_RC );
++
++}
++
++void SX126xWriteCommand( RadioCommands_t command, uint8_t *buffer, uint16_t size )
++{
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) return;
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    if(  command == RADIO_SET_SLEEP) {
++        // Update mode in advance to prevent interrupts from being triggered when the device is sleeping
++        SX126xSetOperatingMode( MODE_SLEEP ); 
++    }
++    sx1262_nss_set(0);
++    spi_write_byte(( uint8_t *)&command, 1);
++    spi_write_byte( buffer, size);
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    if( command != RADIO_SET_SLEEP )
++    {
++        SX126xWaitOnBusy( );
++    }
++}
++
++uint8_t SX126xReadCommand( RadioCommands_t command, uint8_t *buffer, uint16_t size )
++{
++    uint8_t status = 0;
++
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) {
++        if (buffer && size) memset(buffer, 0, size);
++        return 0U;
++    }
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    spi_write_byte(( uint8_t *)&command, 1);
++    uint8_t data = 0x00;
++    spi_transfer(&data, &status, 1);
++    spi_read_byte(buffer, size);
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    SX126xWaitOnBusy( );
++
++    return status;
++}
++
++void SX126xWriteRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
++{
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) return;
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    uint8_t tx_buf[3];
++    tx_buf[0] = RADIO_WRITE_REGISTER;
++    tx_buf[1] = ( address & 0xFF00 ) >> 8;
++    tx_buf[2] = address & 0x00FF;
++    spi_write_byte(( uint8_t *)tx_buf, 3);
++    spi_write_byte( buffer, size);
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    SX126xWaitOnBusy( );
++}
++
++void SX126xWriteRegister( uint16_t address, uint8_t value )
++{
++    SX126xWriteRegisters( address, &value, 1 );
++}
++
++void SX126xReadRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
++{
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) {
++        if (buffer && size) memset(buffer, 0, size);
++        return;
++    }
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    uint8_t tx_buf[4];
++    tx_buf[0] = RADIO_READ_REGISTER;
++    tx_buf[1] = ( address & 0xFF00 ) >> 8;
++    tx_buf[2] = address & 0x00FF;
++    tx_buf[3] = 0;
++    spi_write_byte(( uint8_t *)tx_buf, 4);
++    spi_read_byte(buffer, size);
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    SX126xWaitOnBusy( );
++}
++
++uint8_t SX126xReadRegister( uint16_t address )
++{
++    uint8_t data;
++    SX126xReadRegisters( address, &data, 1 );
++    return data;
++}
++
++void SX126xWriteBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
++{
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) return;
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    uint8_t tx_buf[2];
++    tx_buf[0] = RADIO_WRITE_BUFFER;
++    tx_buf[1] = offset;
++    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
++    spi_write_byte( buffer, size);
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++
++    SX126xWaitOnBusy( );
++}
++
++void SX126xReadBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
++{
++    SX126xCheckDeviceReady( );
++    if (bsp_sx126x_fault_get() != 0U) {
++        if (buffer && size) memset(buffer, 0, size);
++        return;
++    }
++
++    xSemaphoreTake(radio_mutex, portMAX_DELAY);
++    sx1262_nss_set(0);
++    uint8_t tx_buf[3];
++    tx_buf[0] = RADIO_READ_BUFFER;
++    tx_buf[1] = offset;
++    tx_buf[2] = 0;
++    spi_write_byte(( uint8_t *)tx_buf, sizeof(tx_buf));
++    spi_read_byte(buffer, size);
++
++    sx1262_nss_set(1);
++    xSemaphoreGive(radio_mutex);
++    
++    SX126xWaitOnBusy( );
++}
++
++void SX126xSetRfTxPower( int8_t power )
++{
++    SX126xSetTxParams( power, RADIO_RAMP_40_US );
++}
++
++uint8_t SX126xGetDeviceId( void )
++{
++    return SX1262;
++}
++
++void SX126xAntSwOn( void )
++{
++}
++
++void SX126xAntSwOff( void )
++{
++}
++
++bool SX126xCheckRfFrequency( uint32_t frequency )
++{
++    // Implement check. Currently all frequencies are supported
++    return true;
++}
++
++uint32_t SX126xGetDio1PinState( void )
++{
++    uint16_t pin_val;
++    esp_err_t ret = indicator_io_expander->read_input_pins16(&pin_val);
++    if( ret == ESP_OK ) {
++        if( (pin_val & (0x01 << EXPANDER_IO_RADIO_DIO_1)) ) {
++            return 1;
++        }
++    }
++    return 0;
++}

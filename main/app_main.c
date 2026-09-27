@@ -13,6 +13,8 @@
 #include "hal/indicator_board.h"
 #include "hal/backlight.h"
 #include "hal/display_preferences.h"
+#include "hal/bmp390_sensor.h"
+#include "hal/buzzer.h"
 #include "hal/rp2040_bridge.h"
 #include "mesh/channel_message_coordinator.h"
 #include "mesh/channel_store.h"
@@ -119,8 +121,9 @@ void app_main(void)
                  esp_err_to_name(time_ret));
     }
 
-    printf("{\"schema\":%d,\"event\":\"boot\",\"firmware\":\"%s\",\"version\":\"%s\",\"target\":\"seeed_indicator_d1l\",\"release_profile\":\"%s\",\"sd_history_mode\":\"%s\",\"boot_nonce\":%lu,\"secure_random_ready\":%s,\"secure_random_error\":\"%s\",\"nvs_ready\":%s,\"nvs_error\":\"%s\",\"retained_nvs_marker_ready\":%s,\"retained_nvs_markers_complete\":%s,\"retained_nvs_anchor_ready\":%s,\"retained_nvs_sentinel_ready\":%s,\"retained_nvs_external_init_required\":%s,\"retained_nvs_initialized_this_boot\":%s,\"retained_nvs_ready\":%s,\"retained_nvs_init_error\":\"%s\",\"retained_nvs_migration_error\":\"%s\"}\n",
+    printf("{\"schema\":%d,\"event\":\"boot\",\"firmware\":\"%s\",\"version\":\"%s\",\"target\":\"%s\",\"manufacturer\":\"%s\",\"product\":\"%s\",\"release_profile\":\"%s\",\"sd_history_mode\":\"%s\",\"boot_nonce\":%lu,\"secure_random_ready\":%s,\"secure_random_error\":\"%s\",\"nvs_ready\":%s,\"nvs_error\":\"%s\",\"retained_nvs_marker_ready\":%s,\"retained_nvs_markers_complete\":%s,\"retained_nvs_anchor_ready\":%s,\"retained_nvs_sentinel_ready\":%s,\"retained_nvs_external_init_required\":%s,\"retained_nvs_initialized_this_boot\":%s,\"retained_nvs_ready\":%s,\"retained_nvs_init_error\":\"%s\",\"retained_nvs_migration_error\":\"%s\"}\n",
            D1L_CONSOLE_SCHEMA, D1L_FIRMWARE_NAME, D1L_FIRMWARE_VERSION,
+           D1L_TARGET_NAME, D1L_MANUFACTURER, D1L_PRODUCT_NAME,
            d1l_release_profile_name(),
            d1l_release_sd_history_mode_name(),
            (unsigned long)d1l_health_monitor_boot_nonce(),
@@ -152,6 +155,11 @@ void app_main(void)
                      esp_err_to_name(splash_ret));
         }
         ESP_LOGI(TAG, "D1L board initialized; DeskOS boot splash visible");
+#if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+        (void)d1l_bmp390_init();
+        (void)d1l_buzzer_init();
+        d1l_buzzer_beep(80);
+#endif
     }
 
     esp_err_t storage_ret = d1l_storage_status_init();
@@ -172,7 +180,7 @@ void app_main(void)
                          esp_err_to_name(sd_prepare_ret));
             }
         } else {
-            ESP_LOGW(TAG, "RP2040 bridge UART init failed: %s",
+            ESP_LOGW(TAG, "storage bridge init failed: %s",
                      esp_err_to_name(rp2040_ret));
         }
     } else {

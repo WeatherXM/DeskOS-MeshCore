@@ -511,7 +511,7 @@ esp_err_t d1l_map_tile_provider_refresh(
     if (ret == ESP_OK) {
         ret = parse_provider_config(json, &provider);
     }
-    if (ret == ESP_ERR_NOT_FOUND) {
+    if (ret != ESP_OK) {
         d1l_map_tile_provider_builtin(&provider);
         ret = ESP_OK;
     }

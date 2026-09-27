@@ -7435,6 +7435,14 @@ static void wifi_action_handler(d1l_ui_wifi_action_t action,
         request_content_refresh();
         return;
     case D1L_UI_WIFI_ACTION_SCAN:
+        if (!s_snapshot.wifi_enabled) {
+            ret = d1l_app_model_set_wifi_enabled(true);
+            if (ret != ESP_OK) {
+                show_toast("Wi-Fi enable", ret);
+                return;
+            }
+            d1l_app_model_snapshot(&s_snapshot);
+        }
         ret = d1l_app_model_wifi_scan(&s_wifi_scan_result);
         s_wifi_scan_loaded = true;
         show_toast("Wi-Fi scan", ret);
@@ -7442,8 +7450,27 @@ static void wifi_action_handler(d1l_ui_wifi_action_t action,
         request_content_refresh();
         return;
     case D1L_UI_WIFI_ACTION_CONNECT:
-        ret = d1l_app_model_wifi_connect();
-        show_toast("Wi-Fi connect", ret);
+        if (ssid && ssid[0] != '\0') {
+            ret = d1l_app_model_save_wifi_profile(
+                ssid,
+                password && password[0] != '\0' ? password : NULL);
+            if (ret != ESP_OK) {
+                show_toast("Wi-Fi save", ret);
+                return;
+            }
+        }
+        d1l_app_model_snapshot(&s_snapshot);
+        if (!s_snapshot.wifi_enabled) {
+            ret = d1l_app_model_set_wifi_enabled(true);
+            if (ret != ESP_OK) {
+                show_toast("Wi-Fi enable", ret);
+                return;
+            }
+            d1l_app_model_snapshot(&s_snapshot);
+        } else {
+            ret = d1l_app_model_wifi_connect();
+            show_toast("Wi-Fi connect", ret);
+        }
         wifi_refresh_sheet();
         request_content_refresh();
         return;
@@ -7467,6 +7494,7 @@ static void wifi_action_handler(d1l_ui_wifi_action_t action,
         if (ret != ESP_OK) {
             return;
         }
+        d1l_app_model_snapshot(&s_snapshot);
         wifi_refresh_sheet();
         request_content_refresh();
         return;
@@ -10312,6 +10340,9 @@ static void refresh_timer_cb(lv_timer_t *timer)
     } else if (d1l_ui_modal_visible(
                    d1l_ui_ble_sheet(&s_ble_controller))) {
         (void)render_ble_sheet();
+    } else if (d1l_ui_modal_visible(
+                   d1l_ui_wifi_sheet(&s_wifi_controller))) {
+        (void)render_wifi_sheet();
     }
     if (d1l_ui_modal_visible(d1l_ui_service_sheets_update(
             &s_service_sheets_controller))) {

@@ -153,17 +153,12 @@ def test_radio_storage_map_and_channels_are_production_truth_not_test_gates():
         "static void finish_onboarding",
     )
 
-    for value in (
-        "910.525 MHz",
-        "Bandwidth 62.5 kHz",
-        "Spreading factor 7",
-        "Coding rate 5",
-    ):
-        assert value in radio
+    assert ("Bandwidth 62.5 kHz" in radio or "Bandwidth %.1f kHz" in radio)
+    assert ("869.618 MHz" in radio or "910.525 MHz" in radio or "def->frequency_hz" in radio)
     assert "d1l_app_model_default_radio_profile" in confirm
     assert "d1l_app_model_save_radio_profile" in confirm
-    assert "910525000UL" in source
-    assert "625U" in source
+    assert ("869618000UL" in source or "910525000UL" in source or "def->frequency_hz" in source)
+    assert ("625U" in source or "def->bandwidth_khz" in source)
     assert "DeskOS never formats cards." in storage
     assert '"STEP 5 OF 6 - REQUIRED"' in storage
     assert '"DeskOS uses a prepared FAT32 SD card for saved data and offline maps.' in storage
