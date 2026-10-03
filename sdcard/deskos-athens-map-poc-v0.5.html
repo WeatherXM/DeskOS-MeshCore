@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DeskOS Athens Offline Map POC v5</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.13.0/dist/maplibre-gl.css" crossorigin="anonymous">
+  <script src="https://unpkg.com/maplibre-gl@5.13.0/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
+  <script src="https://unpkg.com/@protomaps/basemaps@5.7.2/dist/basemaps.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f6f8; color: #17202a; }
+    .shell { max-width: 1460px; margin: 0 auto; padding: 14px 20px 20px; }
+    h1 { margin: 0 0 3px; font-size: 26px; }
+    .sub { color: #59636e; margin-bottom: 9px; }
+    .notice { background: #fff7df; border: 1px solid #ecd48b; border-radius: 10px; padding: 8px 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.3; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(500px, .9fr); gap: 14px; align-items: start; }
+    .card { background: white; border: 1px solid #dde2e7; border-radius: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.04); overflow: hidden; }
+    .card-body { padding: 12px; }
+    #map { width: 100%; height: min(410px, 45vh); min-height: 360px; background: #e8ecef; }
+    label { display: block; font-size: 13px; font-weight: 650; margin: 0 0 4px; }
+    input, select, button { font: inherit; }
+    input[type="text"], select { width: 100%; border: 1px solid #cfd6dc; border-radius: 9px; padding: 7px 9px; background: white; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field { margin-bottom: 7px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 7px 0; }
+    .stat { border: 1px solid #e0e5e9; border-radius: 10px; padding: 6px 9px; background: #fafbfc; }
+    .stat b { display:block; font-size: 18px; }
+    .stat span { color:#68737d; font-size:12px; }
+    .buttons { display:flex; flex-wrap:wrap; gap:7px; margin-top: 6px; }
+    button { border: 0; border-radius: 9px; padding: 8px 11px; cursor: pointer; font-weight: 700; }
+    button.primary { background:#111820; color:white; }
+    button.secondary { background:#e9edf0; color:#1f2933; }
+    button.danger { background:#fbe7e7; color:#9a1c1c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    progress { width:100%; height:14px; margin-top:6px; }
+    #status { margin-top:5px; min-height: 26px; font-size:12px; line-height:1.3; color:#4c5862; }
+    .log-card { margin-top: 10px; }
+    .log-head { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid #dde2e7; }
+    .log-head b { font-size:14px; }
+    #log { height: 52vh; min-height: 360px; max-height: 760px; overflow:auto; white-space:pre-wrap; background:#111820; color:#d7e0e8; padding:14px 16px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .log-actions { display:flex; gap:8px; }
+    .log-actions button { padding:7px 10px; font-size:12px; }
+    .tiny { color:#6b7680; font-size:11px; line-height:1.35; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .ok { color:#147a3f; }
+    .bad { color:#a92323; }
+    #renderer { position: fixed; left: -10000px; top: 0; width: 256px; height: 256px; pointer-events:none; }
+    @media (max-width: 850px) { .grid { grid-template-columns: 1fr; } #map { height: 480px; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <h1>DeskOS Athens Offline Map POC v5</h1>
+  <div class="sub">Browser-only PMTiles → MapLibre → 256×256 PNG → DeskOS SD-card layout.</div>
+  <div class="notice">
+    <b>Proof of concept:</b> this reads the public Protomaps basemap mirror on Source Cooperative. For browser security, run this page from http://localhost instead of opening it as file://. Do not use this hotlinking setup as the final production service. The page never formats or deletes files.
+  </div>
+
+  <div class="grid">
+    <div class="card"><div id="map"></div></div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="field">
+          <label>PMTiles source</label>
+          <input id="pmtilesUrl" type="text" value="https://data.source.coop/protomaps/openstreetmap/v4.pmtiles" />
+          <div class="tiny">POC source: Source Cooperative mirror. Replace with our own R2 object for production.</div>
+        </div>
+
+        <div class="row">
+          <div class="field">
+            <label>Minimum zoom</label>
+            <select id="zMin"></select>
+          </div>
+          <div class="field">
+            <label>Maximum zoom</label>
+            <select id="zMax"></select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Athens POC bounds</label>
+          <div class="tiny"><code>23.55°E–23.98°E, 37.82°N–38.15°N</code><br>Greater Athens, Piraeus, northern suburbs and airport area.</div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><b id="tileCount">—</b><span>tiles</span></div>
+          <div class="stat"><b id="sizeEstimate">—</b><span>rough PNG estimate</span></div>
+        </div>
+
+        <div class="field">
+          <label>Output</label>
+          <div id="folderLabel" class="tiny">No folder selected. Choose an empty test folder or the root of a prepared DeskOS SD card.</div>
+          <div class="buttons">
+            <button id="chooseFolder" class="secondary">Choose output folder</button>
+            <button id="generate" class="primary" disabled>Generate Athens pack</button>
+            <button id="stop" class="danger" disabled>Stop</button>
+          </div>
+        </div>
+
+        <progress id="progress" value="0" max="1"></progress>
+        <div id="status">Loading preview map…</div>
+        <p class="tiny" style="margin:7px 0 0">
+          Output tiles go to <code>deskos/map/tiles/deskos-osm-poc/zZ/xX/yY.png</code> and the page writes <code>deskos/map/offline-provider.json</code>. Existing PNGs are skipped; unrelated files are untouched.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card log-card">
+    <div class="log-head">
+      <b>Generation log</b>
+      <div class="log-actions">
+        <button id="copyLog" class="secondary">Copy log</button>
+        <button id="clearLog" class="secondary">Clear</button>
+      </div>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+<div id="renderer"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const ATHENS = {
+    west: 23.55,
+    south: 37.82,
+    east: 23.98,
+    north: 38.15,
+    center: [23.73, 37.98]
+  };
+  const SOURCE_ID = 'deskos-osm-poc';
+  const AVG_PNG_BYTES = 52 * 1024;
+
+  const els = {
+    pmtilesUrl: document.getElementById('pmtilesUrl'),
+    zMin: document.getElementById('zMin'),
+    zMax: document.getElementById('zMax'),
+    tileCount: document.getElementById('tileCount'),
+    sizeEstimate: document.getElementById('sizeEstimate'),
+    chooseFolder: document.getElementById('chooseFolder'),
+    generate: document.getElementById('generate'),
+    stop: document.getElementById('stop'),
+    progress: document.getElementById('progress'),
+    status: document.getElementById('status'),
+    log: document.getElementById('log'),
+    copyLog: document.getElementById('copyLog'),
+    clearLog: document.getElementById('clearLog'),
+    folderLabel: document.getElementById('folderLabel')
+  };
+
+  let outputRoot = null;
+  let previewMap = null;
+  let renderMap = null;
+  let protocol = null;
+  let currentArchive = null;
+  let activeUrl = '';
+  let abortRequested = false;
+
+  function log(message) {
+    const ts = new Date().toLocaleTimeString();
+    els.log.textContent += `[${ts}] ${message}\n`;
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function status(message, kind = '') {
+    els.status.className = kind;
+    els.status.textContent = message;
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+
+  function lonToX(lon, z) {
+    const n = 2 ** z;
+    return Math.min(n - 1, Math.max(0, Math.floor(((lon + 180) / 360) * n)));
+  }
+
+  function latToY(lat, z) {
+    const n = 2 ** z;
+    const r = lat * Math.PI / 180;
+    const y = Math.floor((1 - Math.asinh(Math.tan(r)) / Math.PI) / 2 * n);
+    return Math.min(n - 1, Math.max(0, y));
+  }
+
+  function tileCenter(z, x, y) {
+    const n = 2 ** z;
+    const lon = ((x + 0.5) / n) * 360 - 180;
+    const mercY = Math.PI * (1 - 2 * ((y + 0.5) / n));
+    const lat = Math.atan(Math.sinh(mercY)) * 180 / Math.PI;
+    return [lon, lat];
+  }
+
+  function tilesForBounds(zMin, zMax) {
+    const tiles = [];
+    for (let z = zMin; z <= zMax; z++) {
+      const x0 = lonToX(ATHENS.west, z);
+      const x1 = lonToX(ATHENS.east, z);
+      const y0 = latToY(ATHENS.north, z);
+      const y1 = latToY(ATHENS.south, z);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) tiles.push({ z, x, y });
+      }
+    }
+    return tiles;
+  }
+
+  function updateStats() {
+    let zMin = Number(els.zMin.value);
+    let zMax = Number(els.zMax.value);
+    if (zMin > zMax) {
+      if (document.activeElement === els.zMin) els.zMax.value = String(zMin);
+      else els.zMin.value = String(zMax);
+      zMin = Number(els.zMin.value);
+      zMax = Number(els.zMax.value);
+    }
+    const tiles = tilesForBounds(zMin, zMax);
+    els.tileCount.textContent = tiles.length.toLocaleString();
+    els.sizeEstimate.textContent = formatBytes(tiles.length * AVG_PNG_BYTES);
+  }
+
+  function styleFor(url) {
+    return {
+      version: 8,
+      glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
+      sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/light',
+      sources: {
+        protomaps: {
+          type: 'vector',
+          url: `pmtiles://${url}`,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: basemaps.layers('protomaps', basemaps.namedFlavor('light'), { lang: 'en' })
+    };
+  }
+
+  function configureArchive(url) {
+    if (!protocol) {
+      protocol = new pmtiles.Protocol({ metadata: true });
+      maplibregl.addProtocol('pmtiles', protocol.tile);
+    }
+    if (currentArchive && activeUrl === url) return;
+    currentArchive = new pmtiles.PMTiles(url);
+    protocol.add(currentArchive);
+    activeUrl = url;
+  }
+
+  async function initMaps() {
+    const url = els.pmtilesUrl.value.trim();
+    configureArchive(url);
+    status("Checking PMTiles source...");
+    const header = await currentArchive.getHeader();
+    log(`PMTiles source reachable. Archive max zoom: ${header.maxZoom}.`);
+
+    previewMap = new maplibregl.Map({
+      container: 'map',
+      center: ATHENS.center,
+      zoom: 9.5,
+      style: styleFor(url),
+      attributionControl: true,
+      fadeDuration: 0
+    });
+    previewMap.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+    previewMap.on('load', () => {
+      previewMap.addSource('athens-box', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[
+              [ATHENS.west, ATHENS.south],
+              [ATHENS.east, ATHENS.south],
+              [ATHENS.east, ATHENS.north],
+              [ATHENS.west, ATHENS.north],
+              [ATHENS.west, ATHENS.south]
+            ]]
+          },
+          properties: {}
+        }
+      });
+      previewMap.addLayer({
+        id: 'athens-fill', type: 'fill', source: 'athens-box',
+        paint: { 'fill-color': '#ff4d4d', 'fill-opacity': 0.08 }
+      });
+      previewMap.addLayer({
+        id: 'athens-outline', type: 'line', source: 'athens-box',
+        paint: { 'line-color': '#d62828', 'line-width': 3 }
+      });
+      previewMap.fitBounds([[ATHENS.west, ATHENS.south], [ATHENS.east, ATHENS.north]], { padding: 35, animate: false });
+      status('Preview loaded. Choose an output folder to generate the DeskOS pack.', 'ok');
+      log('Preview map loaded from PMTiles.');
+    });
+
+    previewMap.on('error', ev => {
+      const msg = ev && ev.error ? ev.error.message : 'unknown map error';
+      log(`Preview error: ${msg}`);
+    });
+
+    renderMap = new maplibregl.Map({
+      container: 'renderer',
+      center: ATHENS.center,
+      zoom: 12,
+      style: styleFor(url),
+      interactive: false,
+      attributionControl: false,
+      preserveDrawingBuffer: true,
+      fadeDuration: 0,
+      pixelRatio: 1
+    });
+
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Hidden renderer did not load.')), 30000);
+      renderMap.once('load', () => { clearTimeout(timer); resolve(); });
+      renderMap.once('error', ev => {
+        if (ev && ev.error) log(`Renderer warning: ${ev.error.message}`);
+      });
+    });
+    log('Hidden 256×256 renderer ready.');
+  }
+
+  async function chooseFolder() {
+    if (!window.showDirectoryPicker) {
+      throw new Error('showDirectoryPicker() is unavailable. Use desktop Chrome/Edge. If needed, serve this file from http://localhost.');
+    }
+    outputRoot = await window.showDirectoryPicker({ mode: 'readwrite', id: 'deskos-athens-poc' });
+    els.folderLabel.textContent = `Selected: ${outputRoot.name}`;
+    els.generate.disabled = false;
+    log(`Output folder selected: ${outputRoot.name}`);
+  }
+
+  async function getDir(root, parts, create = true) {
+    let dir = root;
+    for (const part of parts) dir = await dir.getDirectoryHandle(part, { create });
+    return dir;
+  }
+
+  async function readExistingFile(dir, name) {
+    try {
+      const handle = await dir.getFileHandle(name, { create: false });
+      return await (await handle.getFile()).text();
+    } catch (err) {
+      if (err && err.name === 'NotFoundError') return null;
+      throw err;
+    }
+  }
+
+  async function fileExists(dir, name) {
+    try {
+      await dir.getFileHandle(name, { create: false });
+      return true;
+    } catch (err) {
+      if (err && err.name === 'NotFoundError') return false;
+      throw err;
+    }
+  }
+
+  async function writeTextSafe(dir, name, text, { allowReplace = false } = {}) {
+    const existing = await readExistingFile(dir, name);
+    if (existing !== null && existing === text) return 'identical';
+    if (existing !== null && !allowReplace) throw new Error(`Refusing to replace different existing file: ${name}`);
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(text);
+    await writable.close();
+    return existing === null ? 'created' : 'replaced';
+  }
+
+  async function writeBlob(dir, name, blob) {
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  }
+
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function mapDiagnostic(map) {
+    let sourceLoaded = false;
+    let tilesLoaded = false;
+    try { sourceLoaded = map.isSourceLoaded('protomaps'); } catch (_) {}
+    try { tilesLoaded = map.areTilesLoaded(); } catch (_) {}
+    return `sourceLoaded=${sourceLoaded}, tilesLoaded=${tilesLoaded}, loaded=${map.loaded()}`;
+  }
+
+  async function waitForDrawable(map, tile, timeoutMs = 30000) {
+    const started = performance.now();
+    let stableFrames = 0;
+    while (performance.now() - started < timeoutMs) {
+      if (abortRequested) throw new DOMException('Stopped by user', 'AbortError');
+      map.triggerRepaint();
+
+      let sourceLoaded = false;
+      try { sourceLoaded = map.isSourceLoaded('protomaps'); } catch (_) {}
+      if (sourceLoaded) stableFrames += 1;
+      else stableFrames = 0;
+
+      // Two consecutive observations avoid capturing the first frame immediately
+      // after MapLibre flips the source to loaded.
+      if (stableFrames >= 2) {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        return;
+      }
+      await delay(125);
+    }
+    throw new Error(`Renderer source timeout at z${tile.z}/${tile.x}/${tile.y} (${mapDiagnostic(map)}).`);
+  }
+
+  async function preflightTile(tile) {
+    // Ask PMTiles directly first. This gives us a useful error if the archive/range
+    // request is the problem rather than MapLibre rendering.
+    const response = await currentArchive.getZxy(tile.z, tile.x, tile.y);
+    if (!response || !response.data || response.data.byteLength === 0) {
+      throw new Error(`PMTiles returned no vector data for z${tile.z}/${tile.x}/${tile.y}.`);
+    }
+  }
+
+  async function renderTileOnce(tile) {
+    await preflightTile(tile);
+    renderMap.jumpTo({ center: tileCenter(tile.z, tile.x, tile.y), zoom: tile.z, bearing: 0, pitch: 0 });
+    await waitForDrawable(renderMap, tile);
+
+    const src = renderMap.getCanvas();
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, 256, 256);
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('PNG encoding failed.')), 'image/png');
+    });
+    if (blob.size < 100) throw new Error(`Suspiciously small PNG (${blob.size} bytes).`);
+    return blob;
+  }
+
+  async function renderTile(tile, maxAttempts = 3) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (attempt > 1) log(`Retry ${attempt}/${maxAttempts} for z${tile.z}/${tile.x}/${tile.y}...`);
+        return await renderTileOnce(tile);
+      } catch (err) {
+        lastError = err;
+        log(`Render attempt ${attempt}/${maxAttempts} failed for z${tile.z}/${tile.x}/${tile.y}: ${err.message || err}`);
+        if (attempt < maxAttempts) {
+          renderMap.triggerRepaint();
+          await delay(1000 * attempt);
+        }
+      }
+    }
+    throw lastError || new Error(`Unable to render z${tile.z}/${tile.x}/${tile.y}.`);
+  }
+
+  async function writeMetadata(root, zMax, pmtilesUrl) {
+    const deskos = await getDir(root, ['deskos']);
+    const map = await getDir(deskos, ['map']);
+    await getDir(map, ['tiles', SOURCE_ID]);
+
+    const provider = {
+      schema: 1,
+      source_id: SOURCE_ID,
+      attribution: '(c) OpenStreetMap contributors',
+      license_url: 'https://www.openstreetmap.org/copyright',
+      offline_storage_permitted: true,
+      background_prefetch_permitted: false,
+      max_zoom: Math.max(14, Math.min(15, zMax)),
+      average_tile_bytes: 53248,
+      cache_budget_mb: 18432,
+      minimum_request_interval_ms: 250
+    };
+
+    const providerText = JSON.stringify(provider, null, 2) + '\n';
+    const existingProvider = await readExistingFile(map, 'offline-provider.json');
+    if (existingProvider !== null && existingProvider !== providerText) {
+      throw new Error('deskos/map/offline-provider.json already exists with a different provider. For this POC, use an empty test folder or a card where you intentionally removed/replaced the previous offline provider. The page will not overwrite it automatically.');
+    }
+    await writeTextSafe(map, 'offline-provider.json', providerText);
+
+    const mapManifest = {
+      schema: 2,
+      kind: 'map_cache',
+      tile_template: `map/tiles/${SOURCE_ID}/z{z}/x{x}/y{y}.png`,
+      interactive_download_supported: false,
+      background_prefetch_supported: false,
+      source: SOURCE_ID,
+      provider_config: 'map/offline-provider.json'
+    };
+    const manifestText = JSON.stringify(mapManifest) + '\n';
+    const existingManifest = await readExistingFile(map, 'manifest.json');
+    if (existingManifest === null) await writeTextSafe(map, 'manifest.json', manifestText);
+
+    const receipt = {
+      schema: 1,
+      kind: 'deskos_offline_map_pack',
+      source_id: SOURCE_ID,
+      region: 'Greater Athens POC',
+      bounds: ATHENS,
+      pmtiles_url: pmtilesUrl,
+      generated_at: new Date().toISOString(),
+      note: 'POC generated in-browser from Protomaps vector PMTiles and rasterized to 256x256 PNG.'
+    };
+    await writeTextSafe(map, 'athens-poc-pack.json', JSON.stringify(receipt, null, 2) + '\n', { allowReplace: true });
+  }
+
+  async function generatePack() {
+    if (!outputRoot) throw new Error('Choose an output folder first.');
+    if (!renderMap || !renderMap.loaded()) throw new Error('Map renderer is not ready yet.');
+
+    const pmtilesUrl = els.pmtilesUrl.value.trim();
+    if (!pmtilesUrl.startsWith('https://')) throw new Error('PMTiles URL must use HTTPS.');
+    if (pmtilesUrl !== activeUrl) {
+      throw new Error('The PMTiles URL changed after the page loaded. Reload the page before generating so preview and renderer use the same source.');
+    }
+
+    const zMin = Number(els.zMin.value);
+    const zMax = Number(els.zMax.value);
+    const tiles = tilesForBounds(zMin, zMax);
+    abortRequested = false;
+    els.stop.disabled = false;
+    els.generate.disabled = true;
+    els.chooseFolder.disabled = true;
+    els.zMin.disabled = true;
+    els.zMax.disabled = true;
+    els.progress.max = tiles.length;
+    els.progress.value = 0;
+
+    try {
+      await writeMetadata(outputRoot, zMax, pmtilesUrl);
+      const sourceRoot = await getDir(outputRoot, ['deskos', 'map', 'tiles', SOURCE_ID]);
+      let created = 0;
+      let skipped = 0;
+      let bytes = 0;
+      log(`Starting ${tiles.length} tiles, z${zMin}–z${zMax}.`);
+
+      for (let i = 0; i < tiles.length; i++) {
+        if (abortRequested) throw new DOMException('Stopped by user', 'AbortError');
+        const tile = tiles[i];
+        const zDir = await getDir(sourceRoot, [`z${tile.z}`]);
+        const xDir = await getDir(zDir, [`x${tile.x}`]);
+        const fileName = `y${tile.y}.png`;
+
+        if (await fileExists(xDir, fileName)) {
+          skipped++;
+          log(`Tile ${i + 1}/${tiles.length}: already exists, skipped z${tile.z}/${tile.x}/${tile.y}.`);
+        } else {
+          status(`Rendering z${tile.z}/${tile.x}/${tile.y} — ${i + 1} of ${tiles.length}`);
+          log(`Tile ${i + 1}/${tiles.length}: rendering z${tile.z}/${tile.x}/${tile.y}`);
+          const png = await renderTile(tile);
+          await writeBlob(xDir, fileName, png);
+          bytes += png.size;
+          created++;
+          log(`Tile ${i + 1}/${tiles.length}: wrote ${fileName} (${formatBytes(png.size)}).`);
+        }
+
+        els.progress.value = i + 1;
+        if ((i + 1) % 20 === 0 || i === tiles.length - 1) {
+          log(`${i + 1}/${tiles.length}: ${created} created, ${skipped} skipped, ${formatBytes(bytes)} written.`);
+        }
+      }
+
+      status(`Done. ${created} PNG tiles written, ${skipped} existing tiles skipped, ${formatBytes(bytes)} newly written.`, 'ok');
+      log('Athens DeskOS map pack complete.');
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        status('Stopped. Existing completed files were left in place; rerun to resume.', 'bad');
+        log('Generation stopped by user.');
+      } else {
+        status(`Error: ${err.message || err}`, 'bad');
+        log(`ERROR: ${err.stack || err.message || err}`);
+      }
+    } finally {
+      els.stop.disabled = true;
+      els.generate.disabled = !outputRoot;
+      els.chooseFolder.disabled = false;
+      els.zMin.disabled = false;
+      els.zMax.disabled = false;
+    }
+  }
+
+  for (let z = 8; z <= 15; z++) {
+    const a = document.createElement('option'); a.value = z; a.textContent = `z${z}`; els.zMin.appendChild(a);
+    const b = document.createElement('option'); b.value = z; b.textContent = `z${z}`; els.zMax.appendChild(b);
+  }
+  els.zMin.value = '8';
+  els.zMax.value = '14';
+  updateStats();
+
+  els.zMin.addEventListener('change', updateStats);
+  els.zMax.addEventListener('change', updateStats);
+  els.chooseFolder.addEventListener('click', async () => {
+    try { await chooseFolder(); }
+    catch (err) { status(`Folder selection failed: ${err.message || err}`, 'bad'); log(`Folder error: ${err.message || err}`); }
+  });
+  els.generate.addEventListener('click', generatePack);
+  els.stop.addEventListener('click', () => { abortRequested = true; els.stop.disabled = true; });
+  els.copyLog.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(els.log.textContent);
+      status('Log copied to clipboard.', 'ok');
+    } catch (err) {
+      log(`Could not copy log: ${err.message || err}`);
+    }
+  });
+  els.clearLog.addEventListener('click', () => { els.log.textContent = ''; });
+
+  if (location.protocol === 'file:') {
+    status('Open this POC through http://localhost, not by double-clicking the HTML file. Run: python3 -m http.server 8765', 'bad');
+    log('FILE URL detected. MapLibre/PMTiles range requests need a normal web origin. Start a local web server and open http://localhost:8765/deskos-athens-map-poc-v5.html');
+    els.chooseFolder.disabled = true;
+    els.generate.disabled = true;
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    status('This browser does not consider the page a secure context. Use desktop Chrome/Edge on http://localhost.', 'bad');
+    log('WARNING: not a secure context; directory writing may be unavailable.');
+  }
+
+  initMaps().catch(err => {
+    status(`Map initialization failed: ${err.message || err}`, 'bad');
+    log(`INIT ERROR: ${err.stack || err.message || err}`);
+  });
+})();
+</script>
+</body>
+</html>
