@@ -158,8 +158,11 @@ def test_exact_git_commit_epoch_is_deterministic_and_fail_closed():
     provenance = read("cmake/d1l_source_provenance.cmake")
     attributes = read(".gitattributes")
     service = read("main/platform/time_service.c")
+    # The BSP is vendored under components/, so configure must not patch the
+    # tree; provenance is still resolved before the IDF project is loaded.
+    assert "git apply" not in root_cmake
     assert root_cmake.index("d1l_resolve_source_provenance(") < root_cmake.index(
-        "foreach(SEEED_BSP_PATCH"
+        "include($ENV{IDF_PATH}/tools/cmake/project.cmake)"
     )
     assert "COMMAND git rev-parse --verify HEAD" in provenance
     assert "COMMAND git show -s --format=%ct HEAD" in provenance

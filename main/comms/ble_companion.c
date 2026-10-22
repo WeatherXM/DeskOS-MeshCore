@@ -443,6 +443,7 @@ static void update_security(uint16_t connection_handle)
     const bool authorized = desc.sec_state.encrypted &&
         desc.sec_state.authenticated && desc.sec_state.bonded;
     const uint16_t mtu = ble_att_mtu(connection_handle);
+    bool should_terminate = false;
     bool should_pump = false;
     portENTER_CRITICAL(&s_lock);
     if (s_start_requested &&
@@ -474,10 +475,17 @@ static void update_security(uint16_t connection_handle)
             should_pump = s_notification_enabled;
         } else {
             s_state = D1L_BLE_STATE_PAIRING;
+            should_terminate = desc.sec_state.encrypted;
+            if (should_terminate) {
+                s_security_reject_count++;
+            }
         }
     }
     portEXIT_CRITICAL(&s_lock);
-    if (should_pump) {
+    if (should_terminate) {
+        (void)ble_gap_terminate(connection_handle,
+                                BLE_ERR_REM_USER_CONN_TERM);
+    } else if (should_pump) {
         pump_tx();
     }
 }

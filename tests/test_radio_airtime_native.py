@@ -19,7 +19,7 @@ def c_function(source, name):
     return source[match.start():end]
 
 
-def test_valid_slow_frames_fit_hardware_and_owner_deadlines():
+def test_valid_slow_frames_fit_hardware_and_owner_deadlines(tmp_path):
     driver = (ROOT / "components/lora/radio.c").read_text()
 
     service = (ROOT / "main/mesh/meshcore_service.c").read_text()

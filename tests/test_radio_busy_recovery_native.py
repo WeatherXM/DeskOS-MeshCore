@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def function(source, name):
-    match = re.search(r"(?:static\s+)?(?:void|bool|uint8_t|uint32_t|esp_err_t)\s+" + name + r"\s*\([^)]*\)\s*\{", source)
+    match = re.search(r"(?:static\s+)?(?:inline\s+)?(?:void|bool|uint8_t|uint32_t|esp_err_t)\s+" + name + r"\s*\([^)]*\)\s*\{", source)
     assert match, name
     end, depth = match.end(), 1
     while depth:
@@ -88,7 +88,7 @@ static void SX126xCheckDeviceReady(void) {SX126xWaitOnBusy();}
 '''
     # Use the production functions, including the checks before chip select.
     for name in ["bsp_sx126x_fault_get", "bsp_sx126x_fault_count_get", "latch_radio_bus_fault",
-                 "spi_write_byte", "spi_read_byte", "spi_transfer", "SX126xReset", "SX126xWaitOnBusy",
+                 "sx1262_nss_set", "spi_write_byte", "spi_read_byte", "spi_transfer", "SX126xReset", "SX126xWaitOnBusy",
                  "SX126xWriteCommand", "SX126xReadCommand"]:
         code += function(board, name)
     code += r'''

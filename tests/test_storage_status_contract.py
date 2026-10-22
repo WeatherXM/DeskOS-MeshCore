@@ -116,7 +116,7 @@ def test_storage_status_service_is_boot_safe_and_live_only_without_sd():
     assert "D1L_STORAGE_MANAGER_INITIAL_PING_TIMEOUT_LIMIT 3U" in source
     assert "s_manager_control_lock" in source
     assert "s_manager_sequence_mutex" in source
-    assert 'xTaskCreate(storage_manager_task' in source
+    assert 'xTaskCreatePinnedToCore(storage_manager_task' in source
     assert "d1l_rp2040_bridge_ping" in source
     assert "d1l_rp2040_bridge_reset" in source
     assert "storage_sd_ready_for_files" in source
