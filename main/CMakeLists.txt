@@ -36,6 +36,7 @@ idf_component_register(
         "hal/indicator_pins.c"
         "hal/bmp390_sensor.c"
         "hal/buzzer.c"
+        "hal/wg1200_restart_guard.c"
         "hal/rp2040_bridge.c"
         "hal/rp2040_file_reply.c"
         "hal/rp2040_sd_reply.c"
@@ -203,6 +204,12 @@ elseif(D1L_SD_HISTORY_MODE STREQUAL "supported_optional")
     set(D1L_SD_HISTORY_MODE_DEFINE D1L_SD_HISTORY_MODE_SUPPORTED_OPTIONAL)
 else()
     message(FATAL_ERROR "Root CMake did not provide a valid SD history mode")
+endif()
+
+if(CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM)
+    # hal/wg1200_restart_guard.c keeps GPIO10 high through panics.
+    target_link_libraries(${COMPONENT_LIB} INTERFACE
+        "-Wl,--wrap=esp_panic_handler")
 endif()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE

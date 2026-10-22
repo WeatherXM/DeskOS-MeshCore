@@ -15,6 +15,7 @@
 #include "hal/display_preferences.h"
 #include "hal/bmp390_sensor.h"
 #include "hal/buzzer.h"
+#include "hal/wg1200_restart_guard.h"
 #include "mesh/contact_policy.h"
 #include "hal/rp2040_bridge.h"
 #include "mesh/channel_message_coordinator.h"
@@ -53,6 +54,9 @@ void app_main(void)
         ESP_LOGE(TAG, "secure random unavailable; identity/channel creation disabled: %s",
                  esp_err_to_name(secure_random_ret));
     }
+    /* Release the WG1200 GPIO10 restart hold before the LCD claims the pin and
+     * re-arm it for the next restart. No-op on other boards. */
+    (void)d1l_wg1200_restart_guard_init();
     /* Buffer UART input before startup/storage work or either console can
      * delay consuming a complete host command. */
     ESP_ERROR_CHECK(d1l_usb_console_init());

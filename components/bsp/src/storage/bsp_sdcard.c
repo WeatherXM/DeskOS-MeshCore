@@ -90,6 +90,11 @@ esp_err_t bsp_sdcard_init(char *mount_point, size_t max_files)
     } else {
         sdmmc_host_t h = SDSPI_HOST_DEFAULT();
         memcpy(&host, &h, sizeof(sdmmc_host_t));
+        /* SDSPI_HOST_DEFAULT() is SPI2 on ESP32-S3. Boards that share the
+         * radio's pins must join the radio's SPI host instead; a second
+         * host on the same pins would take the GPIO matrix outputs away
+         * from the radio. */
+        host.slot = brd->SDSPI_HOST;
         spi_bus_config_t bus_cfg = {
             .mosi_io_num = brd->GPIO_SDSPI_MOSI,
             .miso_io_num = brd->GPIO_SDSPI_MISO,

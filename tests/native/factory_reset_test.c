@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_partition.h"
 #include "nvs.h"
 #include "storage/factory_reset.h"
 
@@ -50,6 +51,8 @@ static size_t s_fail_commit_after_apply_call;
 static size_t s_fail_set_after_apply_call;
 static size_t s_fail_erase_call;
 static size_t s_fail_open_call;
+static size_t s_retained_open_calls;
+static bool s_retained_partition_present;
 
 static void secure_zero(void *data, size_t length)
 {
@@ -72,6 +75,8 @@ static void mock_reset(void)
     s_fail_set_after_apply_call = 0U;
     s_fail_erase_call = 0U;
     s_fail_open_call = 0U;
+    s_retained_open_calls = 0U;
+    s_retained_partition_present = true;
 }
 
 static mock_entry_t *find_entry(const char *partition,
@@ -171,6 +176,12 @@ static esp_err_t mock_open(const char *partition, const char *nvs_namespace,
         return ESP_ERR_INVALID_ARG;
     }
     s_open_calls++;
+    if (strcmp(partition, "d1l_retained") == 0) {
+        s_retained_open_calls++;
+        if (!s_retained_partition_present) {
+            return ESP_ERR_NVS_PART_NOT_FOUND;
+        }
+    }
     if (s_fail_open_call != 0U && s_open_calls == s_fail_open_call) {
         s_fail_open_call = 0U;
         return ESP_FAIL;
@@ -191,6 +202,19 @@ static esp_err_t mock_open(const char *partition, const char *nvs_namespace,
         }
     }
     return ESP_ERR_NO_MEM;
+}
+
+const esp_partition_t *esp_partition_find_first(
+    esp_partition_type_t type, esp_partition_subtype_t subtype,
+    const char *label)
+{
+    static const esp_partition_t retained = {
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS,
+        0x7e1000U, 0x1f000U, "d1l_retained"};
+    assert(type == ESP_PARTITION_TYPE_DATA);
+    assert(subtype == ESP_PARTITION_SUBTYPE_DATA_NVS);
+    assert(label && strcmp(label, "d1l_retained") == 0);
+    return s_retained_partition_present ? &retained : NULL;
 }
 
 esp_err_t nvs_open(const char *namespace_name, nvs_open_mode_t open_mode,
@@ -495,6 +519,45 @@ static void test_inventory_and_complete_reset(void)
     assert_all_sd_lineages(false);
 }
 
+static void test_missing_retained_partition_completes_reset(void)
+{
+    /* WG1200 keeps the stock partition table, which has no dedicated
+     * retained NVS. Its keys cannot exist there, so the reset must finish
+     * instead of stopping at the first retained domain. */
+    mock_reset();
+    s_retained_partition_present = false;
+    uint32_t default_clear = 0U;
+    uint32_t retained_clear = 0U;
+    static const uint8_t value[] = "default-nvs-state";
+    for (size_t i = 0U; i < D1L_FACTORY_RESET_CLEAR_DOMAIN_COUNT; ++i) {
+        d1l_factory_reset_inventory_entry_t entry = {0};
+        assert(d1l_factory_reset_inventory_entry(i, &entry));
+        if (entry.partition == D1L_FACTORY_RESET_PARTITION_RETAINED) {
+            retained_clear++;
+            continue;
+        }
+        default_clear++;
+        assert(mock_seed(entry.partition_label, entry.nvs_namespace,
+                         entry.key, value, sizeof(value)));
+    }
+    assert(retained_clear > 0U);
+
+    d1l_factory_reset_status_t status = {0};
+    assert(d1l_factory_reset_request(&status) == ESP_OK);
+    assert(d1l_factory_reset_resume(&status) == ESP_OK);
+    assert(status.phase == D1L_FACTORY_RESET_PHASE_COMPLETE);
+    assert(status.reset_complete && !status.reset_pending);
+    assert(status.domains_completed == D1L_FACTORY_RESET_CLEAR_DOMAIN_COUNT);
+    assert(status.keys_erased == default_clear);
+    assert(status.keys_already_absent == retained_clear);
+    assert(s_retained_open_calls == 0U);
+    assert_clear_entries_absent();
+
+    memset(&status, 0, sizeof(status));
+    assert(d1l_factory_reset_resume(&status) == ESP_OK);
+    assert(status.reset_complete && status.completed_journal_cleaned);
+}
+
 static void test_request_commit_fail_after_apply_is_read_back_and_restarted(void)
 {
     mock_reset();
@@ -767,6 +830,7 @@ int main(void)
 {
     test_prior_completed_reset_does_not_erase_new_preferences();
     test_inventory_and_complete_reset();
+    test_missing_retained_partition_completes_reset();
     test_request_commit_fail_after_apply_is_read_back_and_restarted();
     test_sd_media_marker_card_swap_and_clear_power_cuts();
     test_request_set_fail_after_apply_is_read_back_and_restarted();

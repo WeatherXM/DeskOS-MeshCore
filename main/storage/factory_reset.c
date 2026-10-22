@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
+#include "esp_partition.h"
 #include "nvs.h"
 
 #define D1L_FACTORY_RESET_JOURNAL_NAMESPACE "d1l_reset"
@@ -931,6 +932,16 @@ static esp_err_t erase_inventory_key(
         return ESP_ERR_INVALID_ARG;
     }
     *out_absent = false;
+    /* A partition table without the dedicated retained NVS (WG1200 keeps the
+     * stock layout) cannot hold these keys. A present partition that fails to
+     * open still fails closed below. */
+    if (entry->partition == D1L_FACTORY_RESET_PARTITION_RETAINED &&
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                 ESP_PARTITION_SUBTYPE_DATA_NVS,
+                                 entry->partition_label) == NULL) {
+        *out_absent = true;
+        return ESP_OK;
+    }
     nvs_handle_t handle;
     esp_err_t ret = entry->partition ==
                             D1L_FACTORY_RESET_PARTITION_RETAINED ?
