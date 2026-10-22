@@ -1,3 +1,4 @@
+#include "ui_typography.h"
 #include "ui_home.h"
 
 #include <string.h>
@@ -95,7 +96,7 @@ static lv_obj_t *home_create_label(lv_obj_t *parent, const char *text, uint32_t 
     if (!parent || !text) {
         return NULL;
     }
-    lv_obj_t *label = lv_label_create(parent);
+    lv_obj_t *label = d1l_ui_label_create(parent);
     if (!label) {
         return NULL;
     }
@@ -361,7 +362,7 @@ static void render_device_status(lv_obj_t *parent,
                        view_model->sd_value_color, D1L_UI_HOME_ACTION_STORAGE,
                        &bindings[D1L_UI_HOME_STATUS_SD], controller);
     render_status_item(card, D1L_UI_HOME_STATUS_ATTENTION, LV_SYMBOL_WARNING,
-                       "Attention", view_model->attention_value,
+                       "Alerts", view_model->attention_value,
                        view_model->attention_value_color,
                        D1L_UI_HOME_ACTION_ATTENTION,
                        &bindings[D1L_UI_HOME_STATUS_ATTENTION], controller);

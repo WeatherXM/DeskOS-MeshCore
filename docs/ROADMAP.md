@@ -25,6 +25,10 @@
 | **1.8.0-rc.5** | Bounded radio recovery, confirmed companion sends, phone discovery/telemetry and reliable contact edits | Previous candidate; received-path label and phone telemetry restart reproduced |
 | **1.8.0-rc.6** | Correct received hop counts and sufficient companion telemetry stack | Published corrective candidate |
 | **1.8.0** | Production release of the 1.8 messaging, companion and update improvements | Production acceptance and exact artifacts recorded in the tagged release |
+| **1.9.0** | Larger text, mentions, contact auto-add rules and optional automatic daylight saving | Acceptance and exact artifacts recorded in the tagged release |
+| **1.9.1** | Verified streaming SD saves for retained history and preferences | Acceptance and measurements recorded in the tagged release |
+| **1.9.2** | Background packet filtering/search and bounded 12-row pages | Exact build and device checks recorded in the tagged release |
+| **1.10.0** | Saved keyboard layouts and accented Latin entry at both text sizes | Exact build and device checks recorded in the tagged release |
 
 The release firmware is the ordinary public product. A controlled peer, Wi-Fi
 credentials, admin password, soak run, qualification firmware, or validation
@@ -272,3 +276,44 @@ selectable contact admission policies, and additional phone commands.
 Optional sensors and the WadaMesh Lua/web/remote application suite are future
 scope decisions. UI modularization (#6) and developer-check consolidation
 (#17) remain maintenance work rather than stable-release requirements.
+
+## 1.9.0: everyday controls and standalone parity
+
+Standard/Large body text, a paged mention picker, role/distance auto-add controls,
+and optional US/Canada or Europe/UK daylight-saving rules are implemented.
+Settings keep the 1.8 identity envelope unchanged for preserving updates and
+rollback. New contact preferences are tied to the current identity. Phone
+clients share the same role/manual/hop policy, without contact eviction.
+
+Remaining work: localization and keyboard layouts, structured cross-client
+replies, other regional time rules, advanced phone commands, storage throughput,
+and the optional sensors/application suite. Complete WadaMesh parity is not
+claimed. Physical acceptance and exact artifacts belong in the tagged release.
+
+## 1.9.1: storage responsiveness
+
+Retained stores reuse the production bridge's verified file stream. One flush
+and complete readback replace repeated 192-byte open/flush/close cycles, while
+the existing temporary-file rename, card-generation checks and reset lineage
+remain the commit boundary. Failed readback keeps the previous primary;
+foreground cancellation remains bounded between transfer chunks. This closes
+the repeated-flush issue, not every possible slow-card or remote-response case.
+
+## 1.9.2: packet browser responsiveness
+
+Packet filtering/search runs in a storage worker and never reads SD from the
+touchscreen task. Twelve-row pages stop after one lookahead match instead of
+counting the whole archive. Navigation, Pause and changed searches cancel the
+old scan; card changes and history clears invalidate its results. Loading and
+read failures remain visible. Localization, keyboard layouts, structured
+replies, optional sensors and the wider WadaMesh app suite remain future work.
+
+## 1.10.0: keyboard layouts and Latin entry
+
+QWERTY, AZERTY and QWERTZ letter layouts are selectable and saved. A dedicated
+accent page supports lower/uppercase Latin characters with bundled Standard
+and Large glyphs. Changing layouts preserves existing inputs, cursors and
+drafts. Two symbols pages make all printable ASCII reachable, including
+password punctuation. Radio messages keep the 138-byte UTF-8 limit. This closes the initial
+keyboard-layout gap; interface translations, additional scripts/input methods
+and complete national desktop layouts remain future scope.

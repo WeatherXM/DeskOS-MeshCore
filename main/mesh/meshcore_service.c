@@ -279,6 +279,7 @@ typedef struct {
     char text[D1L_MESSAGE_TEXT_LEN];
     d1l_meshcore_route_selection_t selection;
     uint8_t attempt;
+    uint32_t tx_timestamp;
     uint32_t ack_hash;
     uint8_t raw[D1L_MESHCORE_MAX_RAW_PACKET];
     uint8_t raw_len;
@@ -1614,7 +1615,7 @@ static void record_dm_delivery_status(uint64_t session_id,
 static bool begin_pending_dm_tx(
     const d1l_contact_entry_t *contact, const char *text,
     const d1l_meshcore_route_selection_t *selection,
-    uint8_t attempt, uint32_t ack_hash, const uint8_t *raw,
+    uint8_t attempt, uint32_t tx_timestamp, uint32_t ack_hash, const uint8_t *raw,
     uint8_t raw_len, bool path_probe,
     const d1l_dm_store_append_outcome_t *append_outcome)
 {
@@ -1643,6 +1644,7 @@ static bool begin_pending_dm_tx(
     }
     s_pending_dm_tx.selection = *selection;
     s_pending_dm_tx.attempt = attempt;
+    s_pending_dm_tx.tx_timestamp = tx_timestamp;
     s_pending_dm_tx.ack_hash = ack_hash;
     memcpy(s_pending_dm_tx.raw, raw, raw_len);
     s_pending_dm_tx.raw_len = raw_len;
@@ -1718,9 +1720,20 @@ static esp_err_t transition_pending_dm_tx(
     const d1l_dm_delivery_state_t expected_state =
         s_pending_dm_tx.delivery.state;
     d1l_dm_delivery_transition_outcome_t outcome = {0};
-    esp_err_t ret = d1l_dm_store_transition_delivery(
-        session_id, expected_state, expected_revision, next_state,
-        reason, error, &outcome);
+    /* After TX, stay available for the peer's immediate ACK. A slow SD flush
+     * here can fill the RX queue before the owner gets back to receiving. */
+    const bool after_radio = next_state == D1L_DM_DELIVERY_TX_DONE ||
+                             next_state == D1L_DM_DELIVERY_AWAITING_ACK;
+    esp_err_t ret;
+    if (after_radio) {
+        ret = d1l_dm_store_transition_delivery_deferred(
+            session_id, expected_state, expected_revision, next_state,
+            reason, error, &outcome);
+    } else {
+        ret = d1l_dm_store_transition_delivery(
+            session_id, expected_state, expected_revision, next_state,
+            reason, error, &outcome);
+    }
     /*
      * An inbound ACK can leave the retained worker finishing the preceding
      * revision just as a reply DM advances QUEUED -> WAITING_RADIO. The row
@@ -1729,7 +1742,7 @@ static esp_err_t transition_pending_dm_tx(
      * that radio admission failed. This keeps an immediate reply from being
      * stranded as a durable FAILED_QUEUE row without ever reaching RF.
      */
-    if (ret == ESP_ERR_NOT_FINISHED && outcome.changed) {
+    if (ret == ESP_ERR_NOT_FINISHED && outcome.changed && !after_radio) {
         ret = meshcore_service_retry_dm_transition_persistence();
         outcome.durable = ret == ESP_OK;
         outcome.error = ret;
@@ -6172,19 +6185,15 @@ static esp_err_t retry_pending_dm_as_flood(uint64_t now_us)
     retry_selection.reason =
         D1L_MESHCORE_ROUTE_SELECTION_FLOOD_DIRECT_RETRY;
 
-    uint32_t tx_timestamp = 0U;
-    ret = d1l_settings_next_mesh_timestamp(&tx_timestamp);
-    if (ret != ESP_OK) {
-        fail_pending_dm_ack_timeout(ret);
-        return ret;
-    }
+    /* A retry is the same logical message. Changing its timestamp defeats
+     * the receiver's attempt-normalized duplicate identity. */
     const uint8_t retry_attempt = 1U;
     uint8_t retry_raw[D1L_MESHCORE_MAX_RAW_PACKET] = {0};
     uint8_t retry_raw_len = 0U;
     uint32_t retry_ack_hash = 0U;
     ret = build_dm_text_packet(
         settings, &contact, s_pending_dm_tx.text, &retry_selection,
-        retry_attempt, tx_timestamp, retry_raw, sizeof(retry_raw),
+        retry_attempt, s_pending_dm_tx.tx_timestamp, retry_raw, sizeof(retry_raw),
         &retry_raw_len, &retry_ack_hash);
     if (ret != ESP_OK) {
         fail_pending_dm_ack_timeout(ret);
@@ -6463,7 +6472,7 @@ static esp_err_t meshcore_service_handle_send_dm(
         goto dm_persistence_release;
     }
     if (!begin_pending_dm_tx(&contact, cmd->dm_text, &selection, 0U,
-                             ack_hash, raw, raw_len, cmd->dm_path_probe,
+                             tx_timestamp, ack_hash, raw, raw_len, cmd->dm_path_probe,
                              &append_outcome)) {
         (void)record_detached_dm_queue_failure(
             &append_outcome, ESP_ERR_INVALID_STATE);
@@ -8130,7 +8139,9 @@ static esp_err_t meshcore_service_send_ack_async(
         complete_unqueued_ack_reservation(row_seq, digest, ret);
         return ret;
     }
-    if (s_tx_busy || s_pending_ack_tx.active) {
+    /* The owner holds queued SEND_RAW work until the active TX terminates.
+     * Keep one ACK reservation, including while another TX is finishing. */
+    if (s_pending_ack_tx.active) {
         s_status.ack_tx_failed++;
         s_status.ack_tx_last_hash = ack_hash;
         s_status.ack_tx_last_error = ESP_ERR_INVALID_STATE;

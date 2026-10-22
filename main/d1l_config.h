@@ -13,7 +13,7 @@
 #define D1L_FIRMWARE_NAME "MeshCore DeskOS D1L"
 #define D1L_USB_CONSOLE_PROMPT "d1l> "
 #endif
-#define D1L_FIRMWARE_VERSION "1.8.0"
+#define D1L_FIRMWARE_VERSION "1.10.0"
 #define D1L_CONSOLE_SCHEMA 1
 
 #define D1L_DISPLAY_WIDTH 480

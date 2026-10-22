@@ -1,4 +1,5 @@
 #include "time_service.h"
+#include "hal/display_preferences.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -433,6 +434,10 @@ static void populate_timezone_status(d1l_time_service_status_t *status)
         D1L_TIMEZONE_SETTING_SCHEMA_VERSION;
     status->timezone_offset_minutes = status->timezone_settings_ready ?
         settings.timezone_offset_minutes : 0;
+    status->timezone_standard_offset_minutes = status->timezone_offset_minutes;
+    d1l_display_preferences_t preferences;
+    d1l_display_preferences_get(&preferences);
+    status->daylight_saving = preferences.daylight_saving;
     (void)d1l_time_display_timezone_label(
         status->timezone_offset_minutes, status->timezone_label,
         sizeof(status->timezone_label));
@@ -440,6 +445,15 @@ static void populate_timezone_status(d1l_time_service_status_t *status)
 
 static void populate_display_time(d1l_time_service_status_t *status)
 {
+    /* The clock snapshot is populated after the preference snapshot. */
+    if (status->clock.wall_valid) {
+        status->timezone_offset_minutes = d1l_time_display_offset_at(
+            status->clock.wall_epoch_sec, status->timezone_standard_offset_minutes,
+            status->daylight_saving);
+        (void)d1l_time_display_timezone_label(
+            status->timezone_offset_minutes, status->timezone_label,
+            sizeof(status->timezone_label));
+    }
     status->display_time_valid = status->clock.wall_valid;
     status->display_time_approximate =
         status->clock.wall_validity == D1L_TIME_VALIDITY_APPROXIMATE;

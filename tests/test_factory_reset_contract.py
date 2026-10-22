@@ -27,7 +27,7 @@ def test_factory_reset_inventory_covers_every_owned_nvs_key_policy():
         re.S,
     )
     entries = [match.groupdict() for match in pattern.finditer(table)]
-    assert len(entries) == 43
+    assert len(entries) == 44
 
     def label(entry):
         value = entry["label"]
@@ -108,6 +108,7 @@ def test_factory_reset_inventory_covers_every_owned_nvs_key_policy():
         ("nvs", "d1l_reset", "sd_read_v1", journal),
         ("nvs", "d1l_reset", "sd_drafts_v1", journal),
     }
+    expected_nvs_tuples.add(("nvs", "d1l_ui", "contact_policy", "D1L_FACTORY_RESET_DISPOSITION_PRESERVE_OWNERSHIP_EVIDENCE"))
     assert nvs_tuples == expected_nvs_tuples
     for entry in entries:
         if entry["raw_slot"] == "D1L_FACTORY_RESET_RAW_SLOT_NONE":
@@ -155,7 +156,7 @@ def test_factory_reset_inventory_covers_every_owned_nvs_key_policy():
         ),
     }
     header = read("main/storage/factory_reset.h")
-    assert "D1L_FACTORY_RESET_INVENTORY_COUNT 43U" in header
+    assert "D1L_FACTORY_RESET_INVENTORY_COUNT 44U" in header
     assert "D1L_FACTORY_RESET_SD_STORE_COUNT 8U" in header
     assert "D1L_FACTORY_RESET_RAW_MARKER_COUNT 2U" in header
     assert "D1L_FACTORY_RESET_RAW_MARKER_BYTES 16U" in header
@@ -370,13 +371,14 @@ def test_factory_reset_sd_lineage_gates_all_primaries_aliases_and_segments():
 
     for function in (
         "probe_sd_history_slot",
-        "read_sd_history_entry",
+        "read_sd_history_entry_checked",
         "append_sd_history_for_generation",
     ):
-        body = packet.split(f"static {'bool' if function == 'read_sd_history_entry' else 'esp_err_t'} {function}", 1)[1]
+        body = packet.split(f"static esp_err_t {function}", 1)[1]
         assert "d1l_retained_blob_store_sd_media_lineage_ready" in body.split(
             "static ", 1
         )[0]
+    assert "return read_sd_history_entry_checked(seq, out_entry) == ESP_OK;" in packet
     reconcile = packet.split("static esp_err_t reconcile_sd_primary", 1)[1].split(
         "static esp_err_t", 1
     )[0]

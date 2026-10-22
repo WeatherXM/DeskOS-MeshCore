@@ -9,7 +9,45 @@ SD-primary retained history when prepared storage is ready, visible live-only
 operation otherwise, and without silent default-NVS fallback. Historical RC2
 artifacts remain bound to their original `core_1_0` profile.
 
-## 1.8.0 production release
+## 1.10.0 keyboard release
+
+- Exercise all three layouts, accent/case pages, multibyte backspace, font
+  bitmaps and cursor/draft preservation in actual LVGL native tests.
+- Verify legacy preference loading, saved choices and failed-write behavior.
+- Build the exact source on the Pi; verify its signed Actions package and
+  preserving install. Confirm the user's keyboard choice survives restart.
+- Check touchscreen accented entry without sending, radio/storage health,
+  retained identity/contact data and Windows Bluetooth Unicode messaging.
+- Publish exact assets and update the guide, website, flasher and existing
+  parity record. Verify public bytes and keep release/recovery files.
+- Record official phone and physical signed-SD paths not repeated.
+
+## 1.9.2 maintenance release
+
+- Verify packet queries leave the UI task, bound page reads and cancel old
+  requests. Cover failed reads, clear/card changes and task allocation failure.
+- Build/test the exact candidate on the Pi; verify its signed Actions package
+  and preserving installation on the authorized D1L.
+- Check physical Packets filtering and return Home, retained identity/contact
+  data, healthy radio/storage, and Windows Bluetooth Public/DM transmission.
+- Publish exact assets and update documentation, website and flasher. Verify
+  public bytes and keep recovery files before removing obsolete build outputs.
+- Explicitly identify official phone and signed-SD hardware paths not repeated.
+
+## 1.9.1 maintenance release
+
+- Verify failed card readback, cancellation, abort failure and media-generation
+  changes cannot publish a new retained primary.
+- Measure the same contact preference save on 1.9.0 and the exact 1.9.1 image;
+  restore the original values and verify the complete contact book.
+- Build/test the candidate on the Pi, then verify the signed Actions package
+  and preserving install on the exact D1L.
+- Exercise Bluetooth Public/DM transmission and retention using the available
+  Windows adapter. Identify phone-app and signed-SD paths not repeated.
+- Publish exact assets, update the website/flasher, verify public downloads and
+  preserve release/recovery files before removing obsolete test builds.
+
+## 1.9.0 production release
 
 The maintainer re-enabled GitHub Actions for this production release. Use the existing
 workflow's exact-source signed package; the attached D1L remains the physical
@@ -17,6 +55,16 @@ acceptance target on the Pi 5.
 
 - Check actual legacy/current companion message frames for zero, one and
   multiple hops, including two/three-byte path hashes and retained rows.
+- Check Standard/Large text and list paging with the production LVGL renderers;
+  verify the changed settings and normal screen on the physical D1L.
+- Exercise mention paging, cursor insertion and over-limit rejection without
+  replacing an existing draft or sending automatically.
+- Verify auto-add role/hop filtering, existing-contact updates, failed preference
+  writes and identity-reset isolation. Check the supported policy commands in
+  the official phone app and restore the original device configuration.
+- Test the supported daylight-saving transition boundaries, confirm local
+  display changes leave protocol time unchanged, and verify saved preferences
+  across a normal device restart.
 - Repeat the official-phone telemetry request that overflowed RC5's worker;
   require the same boot identity, a live radio and measured stack headroom.
 - Verify a newly received channel message in the official app, then release
@@ -38,7 +86,7 @@ acceptance target on the Pi 5.
   are not new-candidate phone acceptance.
 - Exercise the actual flasher console against the D1L and verify its normal
   update, clean-install, failure and storage readiness paths locally.
-- Publish `v1.8.0` as the latest stable release tied to the tested source. Freshly
+- Publish `v1.9.0` as the latest stable release tied to the tested source. Freshly
   download and compare every public asset, update the product page and flasher,
   and verify public downloads and desktop/mobile layouts.
 - Retain the signed release, a device recovery copy and deployment rollback;

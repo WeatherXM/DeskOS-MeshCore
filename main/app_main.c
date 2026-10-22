@@ -15,6 +15,7 @@
 #include "hal/display_preferences.h"
 #include "hal/bmp390_sensor.h"
 #include "hal/buzzer.h"
+#include "mesh/contact_policy.h"
 #include "hal/rp2040_bridge.h"
 #include "mesh/channel_message_coordinator.h"
 #include "mesh/channel_store.h"
@@ -272,6 +273,11 @@ void app_main(void)
     if (identity_ret != ESP_OK) {
         ESP_LOGE(TAG, "MeshCore identity is not ready for setup: %s",
                  esp_err_to_name(identity_ret));
+    }
+
+    const esp_err_t contact_policy_ret = d1l_contact_policy_init();
+    if (contact_policy_ret != ESP_OK) {
+        ESP_LOGW(TAG, "contact auto-add disabled: %s", esp_err_to_name(contact_policy_ret));
     }
 
     d1l_settings_t public_settings = {0};
