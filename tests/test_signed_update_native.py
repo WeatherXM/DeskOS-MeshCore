@@ -114,6 +114,17 @@ static esp_err_t esp_ota_get_partition_description(const esp_partition_t *p, esp
 }
 static esp_err_t esp_ota_set_boot_partition(const esp_partition_t *p) { assert(p == &partition); ++boot_selections; return ESP_OK; }
 static void clear_pending(bool confirmed) { (void)confirmed; }
+#define ESP_ERR_NOT_ALLOWED 0x10D
+static esp_err_t slot_result, file_result, signature_result;
+static esp_err_t d1l_wg1200_boot_select_update_target(const esp_partition_t **target) {
+    assert(*target == &partition); return slot_result;
+}
+static esp_err_t d1l_wg1200_boot_check_update_file(const char *path, uint32_t size) {
+    assert(!strcmp(path, D1L_UPDATE_IMAGE_PATH) && size == 256 && writes == 0); return file_result;
+}
+static esp_err_t d1l_wg1200_boot_verify_app_signature(const esp_partition_t *p, uint32_t size) {
+    assert(p == &partition && size == 256 && writes == 1); return signature_result;
+}
 '''
     code += manifest_type.group(0) + r'''
 static bool parse_manifest(const uint8_t *bytes, size_t size, d1l_update_manifest_t *out) {
@@ -142,6 +153,15 @@ int main(int argc, char **argv) {
     } else if (!strcmp(argv[1], "install_after_ready")) {
         assert(run_install() == ESP_OK && boot_selections == 1);
         assert(d1l_update_request_install() == ESP_ERR_INVALID_STATE);
+    } else if (!strcmp(argv[1], "weatherxm_slot_refused")) {
+        slot_result = ESP_ERR_NOT_ALLOWED;
+        assert(run_install() == ESP_ERR_NOT_ALLOWED && writes == 0 && boot_selections == 0);
+    } else if (!strcmp(argv[1], "unsigned_file_refused")) {
+        file_result = ESP_ERR_INVALID_CRC;
+        assert(run_install() == ESP_ERR_INVALID_CRC && writes == 0 && boot_selections == 0);
+    } else if (!strcmp(argv[1], "installed_signature_rejected")) {
+        signature_result = ESP_ERR_INVALID_CRC;
+        assert(run_install() == ESP_ERR_INVALID_CRC && writes == 1 && boot_selections == 0);
     } else {
         replace_image = !strcmp(argv[1], "replaced_image");
         read_failure = !strcmp(argv[1], "readback_failure");
@@ -167,7 +187,9 @@ int main(int argc, char **argv) {
 
 
 @pytest.mark.parametrize("scenario", ["verified_image", "replaced_image", "readback_failure",
-                                    "cancel_queued", "cancel_at_write_boundary", "install_after_ready"])
+                                    "cancel_queued", "cancel_at_write_boundary", "install_after_ready",
+                                    "weatherxm_slot_refused", "unsigned_file_refused",
+                                    "installed_signature_rejected"])
 def test_update_selects_only_verified_flash_and_honours_cancellation(updater, scenario):
     subprocess.run([str(updater), scenario], check=True)
 
@@ -197,7 +219,7 @@ def boot_result(tmp_path_factory):
 #define portENTER_CRITICAL(lock) ((void)(lock))
 #define portEXIT_CRITICAL(lock) ((void)(lock))
 typedef unsigned nvs_handle_t;
-typedef enum { ESP_OTA_IMG_UNDEFINED, ESP_OTA_IMG_VALID, ESP_OTA_IMG_PENDING_VERIFY } esp_ota_img_states_t;
+typedef enum { ESP_OTA_IMG_NEW, ESP_OTA_IMG_UNDEFINED, ESP_OTA_IMG_VALID, ESP_OTA_IMG_PENDING_VERIFY } esp_ota_img_states_t;
 typedef struct { unsigned type, subtype; char label[17]; } esp_partition_t;
 typedef struct { char project_name[32]; } esp_app_desc_t;
 typedef struct { bool pending; uint32_t sequence, highest; char result[16]; } receipt_t;
@@ -256,12 +278,41 @@ static void esp_restart(void) { assert(0); }
 static void d1l_event_log_append(int level, const char *area, const char *event, const char *text) {
     (void)level; (void)area; (void)event; (void)text;
 }
+/* WG1200: the stock bootloader keeps a new image in the NEW state. */
+static bool stock_bootloader;
+static unsigned rollbacks;
+static bool d1l_wg1200_boot_stock_bootloader(void) { return stock_bootloader; }
+static esp_err_t d1l_wg1200_boot_roll_back(const char *reason) {
+    (void)reason; ++rollbacks;
+    /* The record is settled first: the rollback target boots as NEW too. */
+    assert(!durable.pending && !strcmp(durable.result, "rolled_back"));
+    return ESP_ERR_NOT_FOUND;
+}
 '''
-    for name in ("set_state", "load_highest_sequence", "clear_pending", "d1l_update_boot_confirm"):
+    for name in ("set_state", "load_highest_sequence", "pending_update_recorded",
+                 "clear_pending", "d1l_update_boot_confirm"):
         code += function(source, name) + "\n"
     code += r'''
 int main(int argc, char **argv) {
     assert(argc == 2);
+    if (!strncmp(argv[1], "wg1200_", 7)) {
+        stock_bootloader = true;
+        image_state = ESP_OTA_IMG_NEW;
+        partition.subtype = 0x11; strcpy(partition.label, "ota_1");
+        if (!strcmp(argv[1], "wg1200_new_image_confirmed")) {
+            assert(d1l_update_boot_confirm(ESP_OK) == ESP_OK && s_status.running_image_confirmed);
+            assert(!durable.pending && !strcmp(durable.result, "confirmed") && durable.highest == 123);
+        } else if (!strcmp(argv[1], "wg1200_rollback_target_not_on_trial")) {
+            durable.pending = false;
+            assert(d1l_update_boot_confirm(ESP_FAIL) == ESP_OK && rollbacks == 0);
+            assert(image_state == ESP_OTA_IMG_NEW && !s_status.running_image_confirmed && commits == 0);
+        } else {
+            assert(!strcmp(argv[1], "wg1200_failed_image_rolls_back"));
+            assert(d1l_update_boot_confirm(ESP_FAIL) == ESP_ERR_NOT_FOUND && rollbacks == 1);
+            assert(s_status.state == D1L_UPDATE_STATE_ERROR && durable.highest == 41);
+        }
+        return 0;
+    }
     bool rollback = !strcmp(argv[1], "rollback");
     bool no_pending = !strcmp(argv[1], "no_pending");
     if (no_pending) durable.pending = false;
@@ -309,7 +360,10 @@ int main(int argc, char **argv) {
 
 @pytest.mark.parametrize("scenario", ["rollback", "confirmed", "monotonic", "no_pending",
                                      "open_failure", "read_failure", "write_failure",
-                                     "erase_failure", "commit_failure"])
+                                     "erase_failure", "commit_failure",
+                                     "wg1200_new_image_confirmed",
+                                     "wg1200_rollback_target_not_on_trial",
+                                     "wg1200_failed_image_rolls_back"])
 def test_update_boot_result_matches_durable_receipt(boot_result, scenario):
     subprocess.run([str(boot_result), scenario], check=True)
 

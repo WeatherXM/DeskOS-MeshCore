@@ -310,9 +310,14 @@ bool d1l_ui_more_view(const d1l_ui_more_view_input_t *input,
 
     category = set_category(out_view, D1L_UI_MORE_CATEGORY_SUPPORT,
                             "Support", "About this device", COLOR_VIOLET,
-                            false, 1U);
+                            false, input->weatherxm_available ? 2U : 1U);
     set_item(&category->items[0], "About", about_status, COLOR_TEXT,
              D1L_UI_SETTINGS_ACTION_DIAGNOSTICS, false);
+    if (input->weatherxm_available) {
+        set_item(&category->items[1], "Switch to WeatherXM",
+                 "Restarts device", COLOR_AMBER,
+                 D1L_UI_SETTINGS_ACTION_WEATHERXM, false);
+    }
 
     category = set_category(out_view, D1L_UI_MORE_CATEGORY_ADVANCED,
                             "Messaging", "Replies, contacts, servers and alerts",

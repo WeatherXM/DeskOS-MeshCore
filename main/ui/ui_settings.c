@@ -5,6 +5,7 @@
 
 #include "app/release_profile.h"
 #include "lvgl.h"
+#include "update/wg1200_boot.h"
 
 _Static_assert(sizeof(d1l_ui_settings_controller_t) <=
                    D1L_UI_SETTINGS_CONTROLLER_MAX_BYTES,
@@ -58,6 +59,8 @@ bool d1l_ui_settings_action_available(d1l_ui_settings_action_t action)
         return d1l_release_feature_available(D1L_RELEASE_FEATURE_ADVANCED_QR_EMOJI);
     case D1L_UI_SETTINGS_ACTION_DISPLAY:
         return true;
+    case D1L_UI_SETTINGS_ACTION_WEATHERXM:
+        return d1l_wg1200_boot_weatherxm_available();
     case D1L_UI_SETTINGS_ACTION_NONE:
     case D1L_UI_SETTINGS_ACTION_COUNT:
     default:

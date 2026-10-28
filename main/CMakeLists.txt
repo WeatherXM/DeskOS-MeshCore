@@ -132,6 +132,9 @@ idf_component_register(
         "ui/ui_storage_view.c"
         "ui/ui_wifi.c"
         "update/update_manager.c"
+        "update/wg1200_boot.c"
+        "update/wg1200_boot_policy.c"
+        "update/wg1200_signature.c"
     INCLUDE_DIRS
         "."
         "app"
@@ -151,6 +154,7 @@ idf_component_register(
         bt
         bootloader_support
         driver
+        efuse
         esp_app_format
         esp_partition
         esp_timer

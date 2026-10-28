@@ -37,6 +37,7 @@
 #include "storage/factory_reset.h"
 #include "storage/storage_status.h"
 #include "update/update_manager.h"
+#include "update/wg1200_boot.h"
 #include "ui/ui_phase1.h"
 #include "comms/connectivity_manager.h"
 #include "comms/observer_manager.h"
@@ -57,6 +58,9 @@ void app_main(void)
     /* Release the WG1200 GPIO10 restart hold before the LCD claims the pin and
      * re-arm it for the next restart. No-op on other boards. */
     (void)d1l_wg1200_restart_guard_init();
+    /* WG1200: count crash resets before anything else can crash, and return
+     * to WeatherXM firmware after several in a row. No-op on other boards. */
+    d1l_wg1200_boot_guard_init();
     /* Buffer UART input before startup/storage work or either console can
      * delay consuming a complete host command. */
     ESP_ERROR_CHECK(d1l_usb_console_init());
@@ -161,6 +165,11 @@ void app_main(void)
         }
         ESP_LOGI(TAG, "D1L board initialized; DeskOS boot splash visible");
 #if CONFIG_LCD_BOARD_SENSECAP_INDICATOR_WXM
+        /* Offer WeatherXM firmware before any store, radio or network
+         * starts, so choosing it leaves nothing to quiesce. */
+        if (splash_ret == ESP_OK) {
+            d1l_wg1200_boot_menu_run();
+        }
         (void)d1l_bmp390_init();
 #endif
     }
@@ -368,6 +377,7 @@ void app_main(void)
         ESP_LOGW(TAG, "update boot confirmation failed: %s",
                  esp_err_to_name(update_confirm_ret));
     }
+    d1l_wg1200_boot_guard_mark_started();
 
     d1l_usb_console_run();
 }

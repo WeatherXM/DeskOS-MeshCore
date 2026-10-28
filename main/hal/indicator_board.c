@@ -48,6 +48,18 @@ static const d1l_splash_glyph_t s_splash_glyphs[] = {
     {'S', {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}},
     {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}},
     {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    /* WG1200 boot prompt. */
+    {'B', {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'F', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}},
+    {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'M', {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}},
+    {'P', {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}},
+    {'R', {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}},
+    {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+    {'U', {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'W', {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A}},
+    {'X', {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}},
 };
 
 static const uint8_t *splash_glyph(char character)
@@ -227,7 +239,9 @@ esp_err_t d1l_board_display_boot_splash(void)
     return d1l_board_display_boot_progress(5U);
 }
 
-esp_err_t d1l_board_display_boot_progress(uint8_t percent)
+esp_err_t d1l_board_display_boot_message(const char *status,
+                                         const char *detail,
+                                         uint8_t percent)
 {
     if (!s_status.ready) {
         return ESP_ERR_INVALID_STATE;
@@ -265,7 +279,8 @@ esp_err_t d1l_board_display_boot_progress(uint8_t percent)
         for (int x = 0; x < D1L_LCD_WIDTH; ++x) {
             uint16_t color = background;
             if (splash_text_pixel(x, y, "DESKOS", 188, D1L_SPLASH_GLYPH_SCALE) ||
-                splash_text_pixel(x, y, "LOADING", 258, 3)) {
+                (status && splash_text_pixel(x, y, status, 258, 3)) ||
+                (detail && splash_text_pixel(x, y, detail, 312, 3))) {
                 color = accent;
             } else if (y >= 286 && y < 294 && x >= 120 && x < 360) {
                 color = muted;
@@ -310,6 +325,11 @@ esp_err_t d1l_board_display_boot_progress(uint8_t percent)
     free(line);
     return ESP_OK;
 #endif
+}
+
+esp_err_t d1l_board_display_boot_progress(uint8_t percent)
+{
+    return d1l_board_display_boot_message("LOADING", NULL, percent);
 }
 
 const d1l_board_status_t *d1l_board_status(void)

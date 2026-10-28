@@ -58,6 +58,23 @@ static void test_default_view_is_owned_bounded_and_truthful(void)
     assert(strcmp(item(&view, D1L_UI_MORE_CATEGORY_SUPPORT, 0)->status,
                   "Version 1.2.3") == 0);
     assert(item(&view, D1L_UI_MORE_CATEGORY_SUPPORT, 0)->actionable);
+    assert(view.categories[D1L_UI_MORE_CATEGORY_SUPPORT].item_count == 1U);
+}
+
+static void test_weatherxm_switch_only_when_firmware_present(void)
+{
+    d1l_ui_more_view_input_t input = {
+        .firmware_version = "1.2.3",
+        .weatherxm_available = true,
+    };
+    d1l_ui_more_view_model_t view;
+    assert(d1l_ui_more_view(&input, &view));
+    assert(view.categories[D1L_UI_MORE_CATEGORY_SUPPORT].item_count == 2U);
+    const d1l_ui_more_item_view_t *weatherxm =
+        item(&view, D1L_UI_MORE_CATEGORY_SUPPORT, 1);
+    assert(strcmp(weatherxm->title, "Switch to WeatherXM") == 0);
+    assert(weatherxm->actionable);
+    assert(weatherxm->action == D1L_UI_SETTINGS_ACTION_WEATHERXM);
 }
 
 static void test_connectivity_and_ready_storage_states(void)
@@ -245,6 +262,7 @@ static void test_release_profile_strips_hidden_sd_failures(void)
 int main(void)
 {
     test_default_view_is_owned_bounded_and_truthful();
+    test_weatherxm_switch_only_when_firmware_present();
     test_connectivity_and_ready_storage_states();
     test_storage_faults_override_stale_ready_flags();
     test_invalid_and_long_inputs_fail_closed_or_truncate();

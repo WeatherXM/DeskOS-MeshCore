@@ -28,6 +28,7 @@ typedef enum {
     D1L_UI_SETTINGS_ACTION_PROFILE,
     D1L_UI_SETTINGS_ACTION_QUICK_REPLIES,
     D1L_UI_SETTINGS_ACTION_CONTACT_POLICY,
+    D1L_UI_SETTINGS_ACTION_WEATHERXM,
     D1L_UI_SETTINGS_ACTION_COUNT,
 } d1l_ui_settings_action_t;
 
@@ -65,6 +66,8 @@ typedef struct {
     bool map_tile_cache_ready;
     bool map_tile_render_supported;
     bool identity_ready;
+    /* WG1200 with WeatherXM firmware in another app slot. */
+    bool weatherxm_available;
     uint32_t terminal_event_count;
     uint32_t notification_unread_count;
     const char *observer_state;

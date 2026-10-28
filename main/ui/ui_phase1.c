@@ -67,6 +67,7 @@
 #include "ui_settings.h"
 #include "ui_storage_view.h"
 #include "ui_wifi.h"
+#include "update/wg1200_boot.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "d1l_ui";
@@ -214,6 +215,7 @@ static bool s_terminal_clear_armed;
 static bool s_nodes_clear_armed;
 static bool s_update_install_armed;
 static bool s_update_reboot_armed;
+static bool s_weatherxm_switch_armed;
 static d1l_meshcore_admin_mutation_t s_admin_mutation_armed =
     D1L_MESHCORE_ADMIN_MUTATION_NONE;
 typedef enum {
@@ -239,6 +241,7 @@ static uint32_t s_terminal_clear_deadline;
 static uint32_t s_nodes_clear_deadline;
 static uint32_t s_update_install_deadline;
 static uint32_t s_update_reboot_deadline;
+static uint32_t s_weatherxm_switch_deadline;
 static uint32_t s_admin_mutation_deadline;
 static uint32_t s_admin_cli_deadline;
 static uint32_t s_admin_rendered_generation;
@@ -2226,6 +2229,7 @@ static void more_view_input_from_snapshot(
         .map_tile_cache_ready = snapshot->map_tile_cache_ready,
         .map_tile_render_supported = snapshot->map_tile_render_supported,
         .identity_ready = snapshot->identity_ready,
+        .weatherxm_available = d1l_wg1200_boot_weatherxm_available(),
         .terminal_event_count = (uint32_t)terminal.count,
         .notification_unread_count =
             unread_total > UINT32_MAX ? UINT32_MAX : (uint32_t)unread_total,
@@ -2643,6 +2647,18 @@ static void handle_settings_action(d1l_ui_settings_action_t action, void *contex
         break;
     case D1L_UI_SETTINGS_ACTION_ADVANCED:
         open_sheet_event_cb(NULL);
+        break;
+    case D1L_UI_SETTINGS_ACTION_WEATHERXM:
+        if (!confirmation_active(
+                s_weatherxm_switch_armed, s_weatherxm_switch_deadline)) {
+            s_weatherxm_switch_armed = true;
+            s_weatherxm_switch_deadline = lv_tick_get() + 5000U;
+            show_toast_text("Tap again to restart into WeatherXM", true);
+            break;
+        }
+        s_weatherxm_switch_armed = false;
+        /* Returns only if DeskOS could not hand over. */
+        show_toast("WeatherXM switch", d1l_wg1200_boot_switch_to_weatherxm());
         break;
     case D1L_UI_SETTINGS_ACTION_NONE:
     case D1L_UI_SETTINGS_ACTION_COUNT:

@@ -24,6 +24,7 @@
 #include "nvs.h"
 #include "storage/storage_status.h"
 #include "d1l_config.h"
+#include "update/wg1200_boot.h"
 #include "update_signing_key.h"
 
 #include "ed_25519.h"
@@ -436,6 +437,17 @@ static uint32_t load_highest_sequence(void)
     return sequence;
 }
 
+static bool pending_update_recorded(void)
+{
+    nvs_handle_t handle = 0U;
+    uint32_t sequence = 0U;
+    if (nvs_open(D1L_UPDATE_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
+        (void)nvs_get_u32(handle, "pending_seq", &sequence);
+        nvs_close(handle);
+    }
+    return sequence > 0U;
+}
+
 static esp_err_t save_pending(const d1l_update_manifest_t *manifest)
 {
     if (!manifest) {
@@ -606,6 +618,11 @@ static esp_err_t run_install(void)
 
     const esp_partition_t *target =
         esp_ota_get_next_update_partition(NULL);
+    /* WG1200 slots may hold WeatherXM firmware; never overwrite it. */
+    ret = d1l_wg1200_boot_select_update_target(&target);
+    if (ret != ESP_OK) {
+        goto digest_cleanup;
+    }
     if (!target || target->type != ESP_PARTITION_TYPE_APP ||
         (target->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_0 &&
          target->subtype != ESP_PARTITION_SUBTYPE_APP_OTA_1) ||
@@ -617,6 +634,13 @@ static esp_err_t run_install(void)
     snprintf(s_status.target_partition, sizeof(s_status.target_partition),
              "%s", target->label);
     portEXIT_CRITICAL(&s_lock);
+    /* Secure Boot units: refuse an image the bootloader would reject before
+     * it replaces anything. */
+    ret = d1l_wg1200_boot_check_update_file(
+        D1L_UPDATE_IMAGE_PATH, manifest.image_size);
+    if (ret != ESP_OK) {
+        goto digest_cleanup;
+    }
 
     /* Serialize the last cancellation with the first irreversible write. */
     portENTER_CRITICAL(&s_lock);
@@ -651,6 +675,10 @@ static esp_err_t run_install(void)
     if (esp_ota_get_partition_description(target, &descriptor) != ESP_OK ||
         strcmp(descriptor.project_name, D1L_UPDATE_PROJECT_NAME) != 0) {
         ret = ESP_ERR_INVALID_RESPONSE;
+        goto digest_cleanup;
+    }
+    ret = d1l_wg1200_boot_verify_app_signature(target, manifest.image_size);
+    if (ret != ESP_OK) {
         goto digest_cleanup;
     }
     ret = save_pending(&manifest);
@@ -721,8 +749,14 @@ esp_err_t d1l_update_boot_confirm(esp_err_t nvs_status)
     snprintf(s_status.running_partition,
              sizeof(s_status.running_partition), "%s", running->label);
     portEXIT_CRITICAL(&s_lock);
-    if (state_ret != ESP_OK ||
-        image_state != ESP_OTA_IMG_PENDING_VERIFY) {
+    /* The stock WG1200 bootloader has no rollback, so a new image keeps the
+     * NEW state instead of moving to PENDING_VERIFY. A rollback target boots
+     * as NEW too; only an image with an update record is on trial. */
+    const bool pending_verify =
+        image_state == ESP_OTA_IMG_PENDING_VERIFY ||
+        (image_state == ESP_OTA_IMG_NEW &&
+         d1l_wg1200_boot_stock_bootloader() && pending_update_recorded());
+    if (state_ret != ESP_OK || !pending_verify) {
         const esp_err_t pending_ret = clear_pending(false);
         if (pending_ret != ESP_OK) {
             set_state(D1L_UPDATE_STATE_ERROR, pending_ret, 0U);
@@ -747,6 +781,16 @@ esp_err_t d1l_update_boot_confirm(esp_err_t nvs_status)
         d1l_event_log_append(D1L_EVENT_LOG_LEVEL_ERROR, "update",
                              "boot_rejected",
                              "new image failed boot diagnostics");
+        if (d1l_wg1200_boot_stock_bootloader()) {
+            /* Record the rollback first: the previous image also boots in
+             * the NEW state, which this check would otherwise confirm. If the
+             * rollback fails, keep running; a restart boots this image again. */
+            (void)clear_pending(false);
+            const esp_err_t rollback_ret =
+                d1l_wg1200_boot_roll_back("new image failed boot diagnostics");
+            set_state(D1L_UPDATE_STATE_ERROR, rollback_ret, 0U);
+            return rollback_ret;
+        }
         (void)esp_ota_mark_app_invalid_rollback_and_reboot();
         esp_restart();
         return ESP_FAIL;

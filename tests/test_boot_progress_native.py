@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_early_boot_progress_renders_both_buffers_before_lvgl(tmp_path):
     board = (ROOT / "main/hal/indicator_board.c").read_text()
     helpers = board.split("typedef struct {\n    char character;", 1)[1].split("static uint16_t clamp_touch_coord", 1)[0]
-    renderer = "esp_err_t d1l_board_display_boot_progress" + board.split(
-        "esp_err_t d1l_board_display_boot_progress", 1
+    renderer = "esp_err_t d1l_board_display_boot_message" + board.split(
+        "esp_err_t d1l_board_display_boot_message", 1
     )[1].split("const d1l_board_status_t *d1l_board_status", 1)[0]
     constants = "\n".join(re.findall(r"^#define D1L_(?:LCD_|SPLASH_).*$", board, re.M))
     program = tmp_path / "boot_progress.c"
@@ -36,6 +36,17 @@ int main(void) {
     assert(memcmp(first,second,sizeof(first))==0);
     assert(d1l_board_display_boot_progress(255)==ESP_OK);
     assert(first[290*480+359]==0x2eba && first[290*480+360]==0x0861);
+    /* WG1200 boot prompt: a status line in place of LOADING and a detail
+     * line below the bar, drawn with glyphs the font now carries. */
+    int status_pixels = 0, detail_pixels = 0;
+    assert(d1l_board_display_boot_message("PRESS USER BUTTON", "FOR WEATHERXM", 100)==ESP_OK);
+    for (int y = 258; y < 279; ++y) for (int x = 0; x < 480; ++x) status_pixels += first[y*480+x]==0x2eba;
+    for (int y = 312; y < 333; ++y) for (int x = 0; x < 480; ++x) detail_pixels += first[y*480+x]==0x2eba;
+    assert(status_pixels > 1000 && detail_pixels > 800);
+    assert(d1l_board_display_boot_progress(0)==ESP_OK);
+    detail_pixels = 0;
+    for (int y = 312; y < 333; ++y) for (int x = 0; x < 480; ++x) detail_pixels += first[y*480+x]==0x2eba;
+    assert(detail_pixels == 0);
     s_status.ready=false;
     assert(d1l_board_display_boot_progress(50)==ESP_ERR_INVALID_STATE);
     return 0;
